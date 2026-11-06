@@ -277,11 +277,11 @@ function renderLogin() {
 async function onCredential(resp) {
   try {
     const r = await fetch(API + '/auth/google', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id_token: resp.credential }) });
-    const d = await r.json();
+    let d; try { d = await r.json(); } catch { $('#loginerr').textContent = 'เซิร์ฟเวอร์ตอบผิดรูปแบบ (HTTP ' + r.status + ') — Worker อาจยังไม่ได้ deploy'; return; }
     if (!r.ok) { $('#loginerr').textContent = d.error === 'not_whitelisted' ? 'อีเมลนี้ยังไม่ได้รับสิทธิ์ ติดต่อ Admin' : 'เข้าสู่ระบบไม่สำเร็จ (' + (d.error || r.status) + ')'; return; }
     S.session = d; S.expired = false; localStorage.setItem('mileage_session', JSON.stringify(d));
     boot();
-  } catch { $('#loginerr').textContent = 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้'; }
+  } catch (e) { $('#loginerr').textContent = 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ (' + API + ' : ' + (e && e.message || e) + ')'; }
 }
 
 function renderHome() {
