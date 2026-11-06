@@ -80,7 +80,7 @@ const ERR = {
   photos_required: 'ต้องมีภาพเลขไมล์ทั้งต้นวันและปลายวัน', end_less_than_start: 'เลขไมล์สิ้นสุดน้อยกว่าเลขไมล์เริ่มต้น',
   trip_exists_for_date: 'วันนี้มีรายการอยู่แล้วในระบบ', trip_locked: 'รายการนี้ส่งตรวจแล้ว แก้ไขไม่ได้',
   date_too_old: 'วันที่เก่าเกินกำหนด', date_in_future: 'วันที่เป็นอนาคต', project_not_found: 'ไม่พบโครงการนี้',
-  invalid_odometer: 'เลขไมล์ไม่ถูกต้อง', trip_not_found: 'ไม่พบรายการ', sales_only: 'บัญชีนี้ไม่ใช่พนักงานขาย จึงเริ่มเดินทางไม่ได้', unsupported_image_type: 'ชนิดภาพไม่รองรับ',
+  invalid_odometer: 'เลขไมล์ไม่ถูกต้อง', trip_not_found: 'ไม่พบรายการ', sales_only: 'บัญชีนี้ไม่ใช่พนักงานขาย จึงเริ่มเดินทางไม่ได้', only_draft_deletable: 'ลบได้เฉพาะร่างที่ยังไม่ส่งตรวจ', unsupported_image_type: 'ชนิดภาพไม่รองรับ',
   image_too_large: 'ภาพใหญ่เกินไป', forbidden: 'ไม่มีสิทธิ์', start_missing: 'ยังไม่มีเลขไมล์เริ่มต้น',
 };
 
@@ -112,7 +112,7 @@ const obDel = (seq) => tx('outbox', 'readwrite', (s) => { s.delete(seq); });
 /* ====== state ====== */
 const S = {
   session: JSON.parse(localStorage.getItem('mileage_session') || 'null'),
-  trips: {}, projects: [], failures: [], pending: 0, draftPhoto: null, expired: false,
+  trips: {}, deleted: new Set(), projects: [], failures: [], pending: 0, draftPhoto: null, expired: false,
 };
 const saveTrips = () => kvSet('trips', S.trips);
 const saveFailures = () => kvSet('failures', S.failures);
@@ -150,7 +150,7 @@ async function flush() {
       } catch { break; }                                   // ออฟไลน์/เครือข่ายล้ม: เก็บไว้ลองใหม่
       if (res.status === 401) { expire(); break; }
       if (res.status >= 500 || res.status === 429) break;  // ฝั่งเซิร์ฟเวอร์มีปัญหา: ลองใหม่ภายหลัง
-      if (!res.ok) {                                       // 4xx: ล้มเหลวถาวร แจ้งผู้ใช้
+      if (!res.ok && !(op.method === 'DELETE' && res.status === 404 && /^\/trips\/[\w-]+$/.test(op.path))) { // 4xx: ล้มเหลวถาวร แจ้งผู้ใช้ (ลบร่างที่ไม่เคยขึ้นเซิร์ฟเวอร์ = ปกติ)
         const e = await res.json().catch(() => ({}));
         S.failures.push({ msg: ERR[e.error] || e.error || 'ส่งข้อมูลไม่สำเร็จ', date: S.trips[op.tripId]?.trip_date, at: Date.now() });
       }
@@ -174,6 +174,7 @@ function fromServer(d) {
   };
 }
 async function refreshTrip(id) {
+  if (S.deleted.has(id)) { delete S.trips[id]; return; }
   try { S.trips[id] = fromServer(await apiGet('/trips/' + id)); }
   catch (e) { if (e.status === 404) delete S.trips[id]; else throw e; }
 }
@@ -189,7 +190,7 @@ async function syncHome() {
     for (const month of [m, prev]) {
       for (const t of (await apiGet('/trips?month=' + month)).trips) {
         seen.add(t.id);
-        if (await hasPending(t.id)) continue;
+        if (S.deleted.has(t.id) || await hasPending(t.id)) continue;
         const cur = S.trips[t.id] || { stops: [], photos: {} };
         S.trips[t.id] = { ...cur, id: t.id, trip_date: t.trip_date, status: t.status, start_odometer: t.start_odometer, end_odometer: t.end_odometer, actual_km: t.actual_km, approved_km: t.approved_km, amount_satang: t.amount_satang, sync: 'ok' };
       }
@@ -255,7 +256,7 @@ function render() {
 
 
 const ROLE_TH = { sales: 'พนักงานขาย', admin: 'Admin', manager: 'ผู้จัดการ', accounting: 'บัญชี' };
-const USER_ERR = { email_and_name_required: 'กรอกอีเมลและชื่อให้ถูกต้อง', invalid_role: 'สิทธิ์ไม่ถูกต้อง', cannot_demote_self: 'ไม่สามารถลดสิทธิ์หรือปิดบัญชีของตัวเองได้', forbidden: 'เฉพาะ Admin เท่านั้น' };
+const USER_ERR = { email_and_name_required: 'กรอกอีเมลและชื่อให้ถูกต้อง', invalid_role: 'สิทธิ์ไม่ถูกต้อง', cannot_demote_self: 'ไม่สามารถลดสิทธิ์หรือปิดบัญชีของตัวเองได้', forbidden: 'เฉพาะ Admin เท่านั้น', cannot_delete_self: 'ลบบัญชีของตัวเองไม่ได้', user_has_history: 'ผู้ใช้นี้มีประวัติการใช้งานแล้ว ลบไม่ได้ ให้กด "ปิด" แทน', user_not_found: 'ไม่พบผู้ใช้นี้' };
 async function loadUsers() {
   try { S.users = (await apiGet('/admin/users')).users; } catch (e) { S.users = null; S.usersErr = e.status === 403 ? 'เฉพาะ Admin เท่านั้น' : 'โหลดรายชื่อไม่สำเร็จ'; }
   if (route().name === 'users') renderUsers();
@@ -271,7 +272,7 @@ function renderUsers() {
     <div style="margin-top:14px"><button data-act="adduser">เพิ่มผู้ใช้</button></div></div>
   <div class="card"><h2>ผู้ใช้ทั้งหมด</h2>${list === null ? `<div class="mut">${esc(S.usersErr || 'กำลังโหลด...')}</div>` : list.length ? `<ul class="list">${list.map((u) => `<li><div class="sp"><b>${esc(u.name)}</b><div class="mut">${esc(u.email)}</div></div>
     <select data-uid="${u.id}" data-act-change="userrole" style="width:auto;min-height:40px;padding:6px">${Object.entries(ROLE_TH).map(([k, v]) => `<option value="${k}"${u.role === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
-    <button class="${u.active ? 'danger' : 'ghost'}" data-act="toggleuser" data-uid="${u.id}">${u.active ? 'ปิด' : 'เปิด'}</button></li>`).join('')}</ul>` : '<div class="mut">ยังไม่มีผู้ใช้</div>'}</div>`;
+    <button class="${u.active ? 'danger' : 'ghost'}" data-act="toggleuser" data-uid="${u.id}">${u.active ? 'ปิด' : 'เปิด'}</button>${u.id !== S.session.user.id ? `<button class="danger" data-act="deluser" data-uid="${u.id}">ลบ</button>` : ''}</li>`).join('')}</ul>` : '<div class="mut">ยังไม่มีผู้ใช้</div>'}</div>`;
 }
 async function saveUser(u, patch) {
   const r = await fetch(API + '/admin/users', { method: 'POST', headers: { ...authHdr(), 'content-type': 'application/json' },
@@ -340,7 +341,7 @@ function renderHome() {
   ${open.map((t) => `<div class="card"><div class="row"><b>${fmtDate(t.trip_date)}</b>${chip(t.status)}<span class="sp"></span></div>
     <div class="mut" style="margin:6px 0 10px">เริ่ม ${t.start_odometer?.toLocaleString('th-TH') ?? '-'} · จุดแวะ ${t.stops?.length ?? 0}</div>
     ${t.status === 'returned' ? `<div class="banner bad">${esc((t.approvals || []).filter((a) => a.action === 'return').pop()?.reason || 'Admin ส่งกลับให้แก้ไข')}</div>` : ''}
-    <button data-act="open" data-id="${t.id}">ทำต่อ</button></div>`).join('')}
+    <button data-act="open" data-id="${t.id}">ทำต่อ</button>${t.status === 'draft' ? `<div style="text-align:center;margin-top:6px"><button class="danger" data-act="deltrip" data-id="${t.id}">ลบร่าง</button></div>` : ''}</div>`).join('')}
   ${todayTrip || S.session.user.role !== 'sales' ? '' : `<button data-act="startday" style="margin-bottom:14px;font-size:18px;min-height:56px">เริ่มเดินทาง</button>`}
   <div class="card"><h2>ประวัติ</h2>${all.length ? `<ul class="list">${all.map((t) => `<li><a href="#/trip/${t.id}"><div class="sp"><b>${fmtDate(t.trip_date)}</b><div class="mut">${t.actual_km != null ? kmf(t.approved_km ?? t.actual_km) + ' กม. · ' + baht(t.amount_satang) + ' ฿' : 'ยังไม่สรุป'}</div></div>${chip(t.status)}${t.sync === 'pending' ? '<span class="chip warn">รอซิงก์</span>' : ''}</a></li>`).join('')}</ul>` : '<div class="mut">ยังไม่มีรายการ</div>'}</div>`;
 }
@@ -381,7 +382,8 @@ function renderTrip(t) {
     <label class="row" style="margin:12px 0"><input type="checkbox" id="back" style="width:20px;height:20px"> ลืมกดตอนถึง (เพิ่มย้อนหลัง)</label>
     <div id="backwrap" style="display:none;margin-bottom:12px"><label class="f" for="backtime">เวลาที่ถึงจริง</label><input id="backtime" type="time"></div>
     <button data-act="addstop" data-id="${t.id}">ถึงแล้ว บันทึกจุดนี้</button></div>
-  <button class="sec" data-act="toend" data-id="${t.id}" style="min-height:56px">สิ้นสุดวัน</button>` : ''}`;
+  <button class="sec" data-act="toend" data-id="${t.id}" style="min-height:56px">สิ้นสุดวัน</button>` : ''}
+  ${t.status === 'draft' ? `<div style="text-align:center;margin-top:14px"><button class="danger" data-act="deltrip" data-id="${t.id}">ลบร่างนี้</button></div>` : ''}`;
   if (!(before && app.dataset.sig === html)) {              // ถ้าเนื้อหาไม่เปลี่ยน ไม่ต้องวาดใหม่ (กันโฟกัส/คีย์บอร์ดหลุด)
     app.innerHTML = html; app.dataset.sig = html;
     if (editable) {
@@ -433,6 +435,25 @@ const actions = {
     S.draftPhoto = null; await refreshPending(); go('#/trip/' + id); flush();
   },
 
+  async deltrip(el) {
+    const id = el.dataset.id, t = S.trips[id]; if (!t) return;
+    if (t.status !== 'draft') return toast('ลบได้เฉพาะร่างที่ยังไม่ส่งตรวจ');
+    if (!confirm(`ลบร่างวันที่ ${fmtDate(t.trip_date)}?\nจุดแวะและภาพเลขไมล์ของวันนี้จะถูกลบทั้งหมด กู้คืนไม่ได้`)) return;
+    for (const op of await obAll()) if (op.tripId === id) await obDel(op.seq);   // ทิ้งคิวที่ค้างของทริปนี้
+    delete S.trips[id]; S.deleted.add(id); S.draftPhoto = null;
+    await saveTrips();
+    await obAdd({ tripId: id, method: 'DELETE', path: `/trips/${id}`, kind: 'json' });
+    await refreshPending(); toast('ลบร่างแล้ว'); go('#/'); render(); flush();
+  },
+  async deluser(el) {
+    const u = S.users.find((x) => x.id === el.dataset.uid); if (!u) return;
+    if (!confirm(`ลบผู้ใช้ ${u.name} (${u.email}) ถาวร?\nถ้ามีประวัติการใช้งานแล้วจะลบไม่ได้ ให้ใช้ "ปิด" แทน`)) return;
+    if (!navigator.onLine) return toast('ต้องออนไลน์');
+    const r = await fetch(API + '/admin/users/' + encodeURIComponent(u.id), { method: 'DELETE', headers: authHdr() });
+    if (r.status === 401) return expire();
+    if (!r.ok) { const d = await r.json().catch(() => ({})); return toast(USER_ERR[d.error] || 'ลบไม่สำเร็จ (' + (d.error || r.status) + ')'); }
+    toast('ลบผู้ใช้แล้ว'); await loadUsers();
+  },
   async adduser(el) {
     const email = $('#u_email').value.trim().toLowerCase(), name = $('#u_name').value.trim(), role = $('#u_role').value;
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || !name) return toast('กรอกอีเมลและชื่อให้ถูกต้อง');
