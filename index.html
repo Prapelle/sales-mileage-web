@@ -266,6 +266,7 @@ function render() {
   else if (name === 'trip' && S.trips[id]) { page = key; renderTrip(S.trips[id]); }
   else if (name === 'end' && S.trips[id]) { page = key; renderEnd(S.trips[id]); }
   else if (name === 'users' && S.session.user.role === 'admin') { page = 'users'; renderUsers(); }
+  else if (name === 'projects' && S.session.user.role === 'admin') { page = 'projects'; renderProjects(); }
   else if (name === 'rates' && S.session.user.role === 'admin') { page = 'rates'; renderRates(); }
   else if (name === 'review' && isReviewer()) { page = 'review'; renderReview(); }
   else if (name === 'rv' && isReviewer()) { page = 'rv/' + id; renderRvTrip(); }
@@ -288,6 +289,54 @@ async function adminCall(method, path, body) {
 }
 const monthTh = (m) => new Date(m + '-01T00:00:00Z').toLocaleDateString('th-TH', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 const shiftMonth = (m, n) => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7) - 1 + n, 1)).toISOString().slice(0, 7);
+
+/* ====== พิกัด / Google Maps ====== */
+function parseLatLng(str) {
+  let s = (str || '').trim(); try { s = decodeURIComponent(s); } catch {}
+  const n = '(-?\\d+(?:\\.\\d+)?)';
+  const m = s.match(new RegExp('@' + n + ',' + n)) || s.match(new RegExp('!3d' + n + '!4d' + n)) || s.match(new RegExp('[?&](?:q|ll|query)=' + n + ',' + n)) || s.match(new RegExp('^\\(?\\s*' + n + '\\s*[,\\s]\\s*' + n + '\\s*\\)?$'));
+  if (!m) return null;
+  const lat = +m[1], lng = +m[2];
+  return Math.abs(lat) <= 90 && Math.abs(lng) <= 180 ? { lat, lng } : null;
+}
+const inThailand = (c) => c.lat >= 5 && c.lat <= 21 && c.lng >= 97 && c.lng <= 106;
+const mapLink = (lat, lng) => `https://www.google.com/maps?q=${lat},${lng}`;
+const COORD_HELP = 'วางพิกัด เช่น 14.9930, 103.1029 หรือลิงก์ Google Maps แบบเต็ม (ใน Google Maps กดค้างที่หมุดแล้วแตะตัวเลขพิกัดเพื่อคัดลอก)';
+
+async function loadMapsStatus() { try { S.maps = await adminCall('GET', '/admin/maps-status'); } catch { S.maps = { configured: false, err: true }; } if (route().name === 'projects') renderProjects(); }
+async function loadProjectsAdmin() { try { S.pjs = (await apiGet('/admin/projects')).projects; } catch { S.pjs = null; } if (route().name === 'projects') renderProjects(); }
+function projectsList() {
+  if (S.pjs === null || S.pjs === undefined) return '<div class="mut">กำลังโหลด...</div>';
+  const q = ($('#pj_q')?.value || '').trim().toLowerCase();
+  const rows = S.pjs.filter((p) => !q || (p.code + ' ' + p.name).toLowerCase().includes(q));
+  const noc = S.pjs.filter((p) => p.active && p.lat === null).length;
+  return `${noc ? `<div class="banner warn">มี ${noc} โครงการที่ยังไม่มีพิกัด ทริปที่แวะที่นั่นจะไม่ถูกเทียบระยะทางกับ Google Maps</div>` : ''}
+  ${rows.length ? `<ul class="list">${rows.map((p) => `<li><div class="sp" data-act="pjedit" data-code="${esc(p.code)}" style="cursor:pointer"><b>${esc(p.code)}</b> · ${esc(p.name)}${p.active ? '' : ' <span class="chip">ปิด</span>'}
+    <div class="mut">${p.lat !== null ? `<a href="${mapLink(p.lat, p.lng)}" target="_blank" rel="noopener">📍 ${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}</a>` : '<span style="color:var(--warn)">ไม่มีพิกัด</span>'}${p.address_hint ? ' · ' + esc(p.address_hint) : ''}</div></div>
+    <button class="${p.active ? 'danger' : 'ghost'}" data-act="pjtoggle" data-code="${esc(p.code)}">${p.active ? 'ปิด' : 'เปิด'}</button></li>`).join('')}</ul>` : '<div class="mut">ไม่พบ</div>'}`;
+}
+function renderProjects() {
+  if (S.pjs === undefined) { S.pjs = null; loadProjectsAdmin(); loadMapsStatus(); }
+  if (app.dataset.page === 'projects' && $('#pj_code')) { $('#pj_list').innerHTML = projectsList(); const ms = $('#pj_maps'); if (ms) ms.innerHTML = mapsBadge(); return; }
+  app.innerHTML = `${bar('โครงการ / lead', '#/')}
+  <div class="card"><h2>Google Maps</h2><div id="pj_maps">${mapsBadge()}</div><div class="mut" style="margin-top:6px">ระบบเรียก Google Maps ครั้งเดียวตอนพนักงานกดสิ้นสุดวัน ผลถูกเก็บซ้ำได้โดยไม่เสียเพิ่ม</div></div>
+  <div class="card"><h2 id="pj_title">เพิ่ม / แก้ไขโครงการ</h2>
+    <label class="f" for="pj_code">รหัส (ถ้ารหัสซ้ำ = แก้ไขของเดิม)</label><input id="pj_code" type="text" maxlength="40">
+    <label class="f" for="pj_name">ชื่อโครงการ (ห้ามใส่ชื่อบุคคล)</label><input id="pj_name" type="text" maxlength="120">
+    <label class="f" for="pj_ll">พิกัด (ไม่บังคับ แต่จำเป็นต่อการเทียบ Maps)</label><input id="pj_ll" type="text" placeholder="14.9930, 103.1029">
+    <div class="mut" style="margin-top:4px">${COORD_HELP}</div>
+    <label class="f" for="pj_hint">หมายเหตุที่ตั้ง (เช่น อำเภอ)</label><input id="pj_hint" type="text" maxlength="120">
+    <div style="margin-top:14px;display:grid;gap:8px"><button data-act="pjsave">บันทึกโครงการ</button></div></div>
+  <div class="card"><h2>นำเข้าหลายรายการ</h2><div class="mut" style="margin-bottom:6px">1 บรรทัดต่อ 1 โครงการ: รหัส, ชื่อ, ละติจูด, ลองจิจูด (วางจาก Excel ได้) พิกัดเว้นว่างได้</div>
+    <textarea id="pj_bulk" rows="5" placeholder="P001, โครงการ A, 14.9800, 103.1000&#10;P002, โครงการ B" style="font:inherit;width:100%;padding:10px;border:1px solid var(--line);border-radius:10px"></textarea>
+    <div style="margin-top:10px"><button class="sec" data-act="pjbulk">นำเข้า</button></div></div>
+  <div class="card"><h2>รายการ</h2><input id="pj_q" type="text" placeholder="ค้นหา" data-act-input="pjq"><div id="pj_list" style="margin-top:8px">${projectsList()}</div></div>`;
+}
+function mapsBadge() {
+  if (!S.maps) return '<div class="mut">กำลังตรวจสอบ...</div>';
+  return `<div class="row"><span class="chip ${S.maps.configured ? 'ok' : 'bad'}">${S.maps.configured ? 'ตั้งค่า API key แล้ว' : 'ยังไม่ได้ตั้งค่า API key'}</span><span class="sp"></span>${S.maps.configured ? '<button class="ghost" data-act="mapstest">ทดสอบ (เรียก 1 ครั้ง)</button>' : ''}</div>${S.maps.test ? `<div class="mut" style="margin-top:6px;color:${S.maps.test.ok ? 'var(--ok)' : 'var(--bad)'}">${S.maps.test.ok ? 'ใช้งานได้ ระยะทดสอบ ' + S.maps.test.distance_km + ' กม.' : 'ไม่ผ่าน: ' + esc(S.maps.test.error || '')}</div>` : ''}`;
+}
+document.addEventListener('input', (e) => { if (e.target.dataset?.actInput === 'pjq') $('#pj_list').innerHTML = projectsList(); });
 
 async function loadRates() {
   try { S.rates = (await apiGet('/admin/rates')).rates; } catch { S.rates = null; }
@@ -408,7 +457,13 @@ function renderUsers() {
     <label class="f" for="u_name">ชื่อ</label><input id="u_name" type="text">
     <label class="f" for="u_role">สิทธิ์</label><select id="u_role">${Object.entries(ROLE_TH).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
     <div style="margin-top:14px"><button data-act="adduser">เพิ่มผู้ใช้</button></div></div>
-  <div class="card"><h2>ผู้ใช้ทั้งหมด</h2>${list === null ? `<div class="mut">${esc(S.usersErr || 'กำลังโหลด...')}</div>` : list.length ? `<ul class="list">${list.map((u) => `<li><div class="sp"><b>${esc(u.name)}</b><div class="mut">${esc(u.email)}</div></div>
+  ${list && list.length ? `<div class="card"><h2>ฐานที่อยู่พนักงาน (จุดเริ่มและกลับ ใช้คำนวณ Maps)</h2>
+    <label class="f" for="b_user">พนักงาน</label><select id="b_user" data-act-change="basesel">${list.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
+    <label class="f" for="b_label">ชื่อฐาน (เช่น บ้าน, สำนักงาน)</label><input id="b_label" type="text" maxlength="60" value="${esc(list[0].base_label || '')}">
+    <label class="f" for="b_ll">พิกัดฐาน</label><input id="b_ll" type="text" placeholder="14.9930, 103.1029" value="${list[0].base_lat != null ? list[0].base_lat + ', ' + list[0].base_lng : ''}">
+    <div class="mut" style="margin-top:4px">${COORD_HELP}</div>
+    <div style="margin-top:12px"><button data-act="savebase">บันทึกฐาน</button></div></div>` : ''}
+  <div class="card"><h2>ผู้ใช้ทั้งหมด</h2>${list === null ? `<div class="mut">${esc(S.usersErr || 'กำลังโหลด...')}</div>` : list.length ? `<ul class="list">${list.map((u) => `<li><div class="sp"><b>${esc(u.name)}</b><div class="mut">${esc(u.email)}${u.role === 'sales' ? (u.base_lat != null ? ' · ฐาน ✓' : ' · <span style="color:var(--warn)">ยังไม่ตั้งฐาน</span>') : ''}</div></div>
     <select data-uid="${u.id}" data-act-change="userrole" style="width:auto;min-height:40px;padding:6px">${Object.entries(ROLE_TH).map(([k, v]) => `<option value="${k}"${u.role === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
     <button class="${u.active ? 'danger' : 'ghost'}" data-act="toggleuser" data-uid="${u.id}">${u.active ? 'ปิด' : 'เปิด'}</button>${u.id !== S.session.user.id ? `<button class="danger" data-act="deluser" data-uid="${u.id}">ลบ</button>` : ''}</li>`).join('')}</ul>` : '<div class="mut">ยังไม่มีผู้ใช้</div>'}</div>`;
 }
@@ -420,7 +475,9 @@ async function saveUser(u, patch) {
   return true;
 }
 document.addEventListener('change', async (e) => {
-  const el = e.target; if (el.dataset.actChange !== 'userrole') return;
+  const el = e.target;
+  if (el.dataset.actChange === 'basesel') { const u = S.users.find((x) => x.id === el.value); $('#b_label').value = u?.base_label || ''; $('#b_ll').value = u?.base_lat != null ? `${u.base_lat}, ${u.base_lng}` : ''; return; }
+  if (el.dataset.actChange !== 'userrole') return;
   const u = S.users.find((x) => x.id === el.dataset.uid);
   if (await saveUser(u, { role: el.value })) { toast('เปลี่ยนสิทธิ์แล้ว'); } 
   await loadUsers();
@@ -474,6 +531,7 @@ function renderHome() {
   app.innerHTML = `${bar('เบิกค่าเดินทาง')}${fails}
   <div class="row" style="margin-bottom:12px"><div class="sp"><b>${esc(S.session.user.name)}</b><div class="mut">${esc(S.session.user.email)}</div></div><button class="ghost" data-act="logout">ออก</button></div>
   ${isReviewer() ? '<a class="btn" href="#/review" style="display:block;text-align:center;text-decoration:none;margin-bottom:8px">ตรวจและจ่าย</a>' : ''}
+  ${S.session.user.role === 'admin' ? '<a class="btn sec" href="#/projects" style="display:block;text-align:center;text-decoration:none;margin-bottom:8px">โครงการ / lead และ Google Maps (Admin)</a>' : ''}
   ${S.session.user.role === 'admin' ? '<a class="btn sec" href="#/rates" style="display:block;text-align:center;text-decoration:none;margin-bottom:8px">อัตราเบิกต่อ กม. (Admin)</a>' : ''}
   ${S.session.user.role === 'admin' ? '<a class="btn sec" href="#/users" style="display:block;text-align:center;text-decoration:none;margin-bottom:12px">จัดการผู้ใช้ (Admin)</a>' : ''}
   <div class="grid2" style="margin-bottom:12px"><div class="card kpi" style="margin:0"><h2>ระยะทางเดือนนี้</h2><div class="big">${kmf(sumKm)} <span class="mut">กม.</span></div></div>
@@ -632,6 +690,55 @@ const actions = {
     try { await adminCall('POST', '/admin/rates', { rate_baht_km: baht_, effective_from: d }); toast('บันทึกอัตราแล้ว'); $('#rt_baht').value = ''; await loadRates(); }
     catch (e) { toast(e.code === 'rate_exists_for_date' ? 'มีอัตราของวันที่นี้อยู่แล้ว เลือกวันอื่น' : 'บันทึกไม่สำเร็จ (' + (e.code || e.message) + ')'); }
     el.disabled = false;
+  },
+  async pjsave(el) {
+    const code = $('#pj_code').value.trim(), name = $('#pj_name').value.trim(), llv = $('#pj_ll').value.trim(), hint = $('#pj_hint').value.trim();
+    if (!code || !name) return toast('กรอกรหัสและชื่อโครงการ');
+    let c = null;
+    if (llv) { c = parseLatLng(llv); if (!c) return toast('อ่านพิกัดไม่ได้ ลองรูปแบบ 14.9930, 103.1029'); if (!inThailand(c) && !confirm('พิกัดนี้อยู่นอกประเทศไทย ใช้ต่อไหม?')) return; }
+    el.disabled = true;
+    try { await adminCall('POST', '/admin/projects', { code, name, lat: c?.lat ?? null, lng: c?.lng ?? null, address_hint: hint || null, active: true });
+      toast('บันทึกแล้ว'); for (const i of ['pj_code', 'pj_name', 'pj_ll', 'pj_hint']) $('#' + i).value = ''; $('#pj_title').textContent = 'เพิ่ม / แก้ไขโครงการ'; await loadProjectsAdmin(); }
+    catch (e) { toast('บันทึกไม่สำเร็จ (' + (e.code || e.message) + ')'); }
+    el.disabled = false;
+  },
+  pjedit(el) {
+    const p = S.pjs.find((x) => x.code === el.dataset.code); if (!p) return;
+    $('#pj_code').value = p.code; $('#pj_name').value = p.name; $('#pj_ll').value = p.lat !== null ? `${p.lat}, ${p.lng}` : ''; $('#pj_hint').value = p.address_hint || '';
+    $('#pj_title').textContent = 'แก้ไข ' + p.code; window.scrollTo({ top: 0, behavior: 'smooth' });
+  },
+  async pjtoggle(el) {
+    const p = S.pjs.find((x) => x.code === el.dataset.code); if (!p) return;
+    try { await adminCall('POST', '/admin/projects', { code: p.code, name: p.name, lat: p.lat, lng: p.lng, address_hint: p.address_hint, active: !p.active }); await loadProjectsAdmin(); }
+    catch (e) { toast('ไม่สำเร็จ (' + (e.code || e.message) + ')'); }
+  },
+  async pjbulk(el) {
+    const lines = $('#pj_bulk').value.split('\n').map((l) => l.trim()).filter(Boolean);
+    if (!lines.length) return toast('วางรายการก่อน');
+    const items = [], bad = [];
+    lines.forEach((l, i) => {
+      const f = (l.includes('\t') ? l.split('\t') : l.split(',')).map((x) => x.trim());
+      const code = f[0], name = f[1]; if (!code || !name) return bad.push(i + 1);
+      let c = null; const rest = f.slice(2).filter(Boolean);
+      if (rest.length) { c = parseLatLng(rest.join(', ')); if (!c) return bad.push(i + 1); }
+      items.push({ code: code.slice(0, 40), name: name.slice(0, 120), lat: c?.lat ?? null, lng: c?.lng ?? null, active: true });
+    });
+    if (bad.length) return toast('บรรทัดที่อ่านไม่ได้: ' + bad.slice(0, 8).join(', '));
+    if (!confirm(`นำเข้า ${items.length} โครงการ? (รหัสซ้ำจะถูกแก้ไขของเดิม)`)) return;
+    el.disabled = true; let ok = 0;
+    for (const it of items) { try { await adminCall('POST', '/admin/projects', it); ok++; } catch {} }
+    el.disabled = false; toast(`นำเข้าสำเร็จ ${ok}/${items.length}`); if (ok === items.length) $('#pj_bulk').value = ''; await loadProjectsAdmin();
+  },
+  async mapstest(el) {
+    el.disabled = true; try { S.maps.test = await adminCall('POST', '/admin/maps-test'); } catch { S.maps.test = { ok: false, error: 'เรียกเซิร์ฟเวอร์ไม่ได้' }; }
+    renderProjects();
+  },
+  async savebase(el) {
+    const u = S.users.find((x) => x.id === $('#b_user').value); if (!u) return toast('เลือกพนักงาน');
+    const label = $('#b_label').value.trim(), llv = $('#b_ll').value.trim();
+    let c = null;
+    if (llv) { c = parseLatLng(llv); if (!c) return toast('อ่านพิกัดไม่ได้ ลองรูปแบบ 14.9930, 103.1029'); if (!inThailand(c) && !confirm('พิกัดนี้อยู่นอกประเทศไทย ใช้ต่อไหม?')) return; }
+    if (await saveUser(u, { base_label: label || null, base_lat: c?.lat ?? null, base_lng: c?.lng ?? null })) { toast('บันทึกฐานแล้ว'); await loadUsers(); }
   },
   async adduser(el) {
     const email = $('#u_email').value.trim().toLowerCase(), name = $('#u_name').value.trim(), role = $('#u_role').value;
