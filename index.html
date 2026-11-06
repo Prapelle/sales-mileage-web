@@ -239,13 +239,53 @@ function render() {
     if (h) h.replaceWith(tmp.firstElementChild);
     return;
   }
+  if (name === 'users' && app.dataset.page === 'users' && $('#u_email')) {
+    const h = app.querySelector('header.top'); const tmp = document.createElement('div');
+    tmp.innerHTML = bar('จัดการผู้ใช้', '#/'); if (h) h.replaceWith(tmp.firstElementChild);
+    return;
+  }
   let page = 'home';
   if (name === 'start') { page = 'start'; renderStart(); }
   else if (name === 'trip' && S.trips[id]) { page = key; renderTrip(S.trips[id]); }
   else if (name === 'end' && S.trips[id]) { page = key; renderEnd(S.trips[id]); }
+  else if (name === 'users' && S.session.user.role === 'admin') { page = 'users'; renderUsers(); }
   else renderHome();
   app.dataset.page = page === 'start' ? 'start/' : page;
 }
+
+
+const ROLE_TH = { sales: 'พนักงานขาย', admin: 'Admin', manager: 'ผู้จัดการ', accounting: 'บัญชี' };
+const USER_ERR = { email_and_name_required: 'กรอกอีเมลและชื่อให้ถูกต้อง', invalid_role: 'สิทธิ์ไม่ถูกต้อง', cannot_demote_self: 'ไม่สามารถลดสิทธิ์หรือปิดบัญชีของตัวเองได้', forbidden: 'เฉพาะ Admin เท่านั้น' };
+async function loadUsers() {
+  try { S.users = (await apiGet('/admin/users')).users; } catch (e) { S.users = null; S.usersErr = e.status === 403 ? 'เฉพาะ Admin เท่านั้น' : 'โหลดรายชื่อไม่สำเร็จ'; }
+  if (route().name === 'users') renderUsers();
+}
+function renderUsers() {
+  if (S.users === undefined) { S.users = null; S.usersErr = ''; loadUsers(); }
+  const list = S.users;
+  app.innerHTML = `${bar('จัดการผู้ใช้', '#/')}
+  <div class="card"><h2>เพิ่มผู้ใช้</h2>
+    <label class="f" for="u_email">อีเมล Google</label><input id="u_email" type="email" inputmode="email" autocapitalize="off" placeholder="name@gmail.com" style="font:inherit;width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;min-height:48px">
+    <label class="f" for="u_name">ชื่อ</label><input id="u_name" type="text">
+    <label class="f" for="u_role">สิทธิ์</label><select id="u_role">${Object.entries(ROLE_TH).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+    <div style="margin-top:14px"><button data-act="adduser">เพิ่มผู้ใช้</button></div></div>
+  <div class="card"><h2>ผู้ใช้ทั้งหมด</h2>${list === null ? `<div class="mut">${esc(S.usersErr || 'กำลังโหลด...')}</div>` : list.length ? `<ul class="list">${list.map((u) => `<li><div class="sp"><b>${esc(u.name)}</b><div class="mut">${esc(u.email)}</div></div>
+    <select data-uid="${u.id}" data-act-change="userrole" style="width:auto;min-height:40px;padding:6px">${Object.entries(ROLE_TH).map(([k, v]) => `<option value="${k}"${u.role === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
+    <button class="${u.active ? 'danger' : 'ghost'}" data-act="toggleuser" data-uid="${u.id}">${u.active ? 'ปิด' : 'เปิด'}</button></li>`).join('')}</ul>` : '<div class="mut">ยังไม่มีผู้ใช้</div>'}</div>`;
+}
+async function saveUser(u, patch) {
+  const r = await fetch(API + '/admin/users', { method: 'POST', headers: { ...authHdr(), 'content-type': 'application/json' },
+    body: JSON.stringify({ email: u.email, name: u.name, role: u.role, base_label: u.base_label, base_lat: u.base_lat, base_lng: u.base_lng, active: !!u.active, ...patch }) });
+  if (r.status === 401) { expire(); return false; }
+  if (!r.ok) { const d = await r.json().catch(() => ({})); toast(USER_ERR[d.error] || 'บันทึกไม่สำเร็จ (' + (d.error || r.status) + ')'); return false; }
+  return true;
+}
+document.addEventListener('change', async (e) => {
+  const el = e.target; if (el.dataset.actChange !== 'userrole') return;
+  const u = S.users.find((x) => x.id === el.dataset.uid);
+  if (await saveUser(u, { role: el.value })) { toast('เปลี่ยนสิทธิ์แล้ว'); } 
+  await loadUsers();
+});
 
 /* เก็บ/คืนค่าที่ผู้ใช้กรอกในฟอร์มจุดแวะ เมื่อหน้าถูกวาดใหม่ (เช่น ซิงก์เสร็จ) */
 function snapForm() {
@@ -279,7 +319,7 @@ async function onCredential(resp) {
     const r = await fetch(API + '/auth/google', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id_token: resp.credential }) });
     let d; try { d = await r.json(); } catch { $('#loginerr').textContent = 'เซิร์ฟเวอร์ตอบผิดรูปแบบ (HTTP ' + r.status + ') — Worker อาจยังไม่ได้ deploy'; return; }
     if (!r.ok) { $('#loginerr').textContent = d.error === 'not_whitelisted' ? 'อีเมลนี้ยังไม่ได้รับสิทธิ์ ติดต่อ Admin' : 'เข้าสู่ระบบไม่สำเร็จ (' + (d.error || r.status) + ')'; return; }
-    S.session = d; S.expired = false; localStorage.setItem('mileage_session', JSON.stringify(d));
+    S.users = undefined; S.session = d; S.expired = false; localStorage.setItem('mileage_session', JSON.stringify(d));
     boot();
   } catch (e) { $('#loginerr').textContent = 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ (' + API + ' : ' + (e && e.message || e) + ')'; }
 }
@@ -294,6 +334,7 @@ function renderHome() {
   const fails = S.failures.map((f, i) => `<div class="banner bad">ส่งข้อมูลไม่สำเร็จ${f.date ? ' (' + fmtDate(f.date) + ')' : ''}: ${esc(f.msg)} <button class="ghost" data-act="dismiss" data-i="${i}">ปิด</button></div>`).join('');
   app.innerHTML = `${bar('เบิกค่าเดินทาง')}${fails}
   <div class="row" style="margin-bottom:12px"><div class="sp"><b>${esc(S.session.user.name)}</b><div class="mut">${esc(S.session.user.email)}</div></div><button class="ghost" data-act="logout">ออก</button></div>
+  ${S.session.user.role === 'admin' ? '<a class="btn sec" href="#/users" style="display:block;text-align:center;text-decoration:none;margin-bottom:12px">จัดการผู้ใช้ (Admin)</a>' : ''}
   <div class="grid2" style="margin-bottom:12px"><div class="card kpi" style="margin:0"><h2>ระยะทางเดือนนี้</h2><div class="big">${kmf(sumKm)} <span class="mut">กม.</span></div></div>
   <div class="card kpi" style="margin:0"><h2>ยอดเบิกเดือนนี้</h2><div class="big">${baht(sumAmt)} <span class="mut">฿</span></div></div></div>
   ${open.map((t) => `<div class="card"><div class="row"><b>${fmtDate(t.trip_date)}</b>${chip(t.status)}<span class="sp"></span></div>
@@ -390,6 +431,22 @@ const actions = {
     await obAdd({ tripId: id, method: 'POST', path: '/trips/start', kind: 'json', body: { id, trip_date: date, start_odometer: odo } });
     await obAdd({ tripId: id, method: 'PUT', path: `/trips/${id}/photo/start`, kind: 'photo', blob: S.draftPhoto.blob, ctype: 'image/jpeg' });
     S.draftPhoto = null; await refreshPending(); go('#/trip/' + id); flush();
+  },
+
+  async adduser(el) {
+    const email = $('#u_email').value.trim().toLowerCase(), name = $('#u_name').value.trim(), role = $('#u_role').value;
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || !name) return toast('กรอกอีเมลและชื่อให้ถูกต้อง');
+    if (S.users?.some((u) => u.email === email)) return toast('มีอีเมลนี้อยู่แล้ว');
+    if (!navigator.onLine) return toast('ต้องออนไลน์');
+    el.disabled = true;
+    const ok = await saveUser({ email, name, role, active: 1 }, {});
+    el.disabled = false;
+    if (ok) { toast('เพิ่มผู้ใช้แล้ว'); await loadUsers(); }
+  },
+  async toggleuser(el) {
+    const u = S.users.find((x) => x.id === el.dataset.uid);
+    if (u.active && !confirm(`ปิดการใช้งาน ${u.name}?`)) return;
+    if (await saveUser(u, { active: !u.active })) { toast(u.active ? 'ปิดแล้ว' : 'เปิดแล้ว'); await loadUsers(); }
   },
 
   async addstop(el) {
