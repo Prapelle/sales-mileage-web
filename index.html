@@ -193,7 +193,7 @@ function fromServer(d) {
   return {
     id: t.id, trip_date: t.trip_date, status: t.status, start_odometer: t.start_odometer, end_odometer: t.end_odometer,
     actual_km: t.actual_km, approved_km: t.approved_km, amount_satang: t.amount_satang,
-    stops: d.stops.map((s) => ({ id: s.id, label: s.project_code ? `${s.project_code} · ${s.project_name}` : s.other_label, purpose: s.purpose_code, at: s.client_arrived_at || s.arrived_at })),
+    stops: d.stops.map((s) => ({ id: s.id, label: s.project_code ? `${s.project_code} · ${s.project_name}` : s.other_label, purpose: s.purpose_code, loc: s.loc_source || null, at: s.client_arrived_at || s.arrived_at })),
     photos: { start: d.photos.some((p) => p.kind === 'start'), end: d.photos.some((p) => p.kind === 'end') },
     approvals: d.approvals, sync: 'ok',
   };
@@ -242,6 +242,7 @@ document.addEventListener('change', async (e) => {
     const blob = await compress(el.files[0]);
     if (S.draftPhoto) URL.revokeObjectURL(S.draftPhoto.url);
     S.draftPhoto = { blob, url: URL.createObjectURL(blob) };
+    if ($('#gpsbox')) startGpsCapture();
     const box = $('#photobox'); box.innerHTML = `<img src="${S.draftPhoto.url}" alt="ภาพเลขไมล์"><input type="file" accept="image/*" capture="environment" data-photo>`;
   } catch { toast('อ่านภาพไม่สำเร็จ ลองถ่ายใหม่'); }
 });
@@ -256,6 +257,7 @@ const chip = (st) => { const [t, c] = STATUS[st] || [st, '']; return `<span clas
 function render() {
   const { name, id } = route();
   S.draftPhoto = name === 'start' || name === 'end' ? S.draftPhoto : null;
+  if (name !== 'start' && name !== 'end') { S.gps = null; S.gpsP = null; }
   if (!S.session) { app.dataset.page = 'login'; return renderLogin(); }
   const key = name + '/' + (id || '');
   // หน้าถ่ายภาพ/กรอกเลขไมล์: ห้ามวาดใหม่ระหว่างที่ผู้ใช้กำลังกรอก (ซิงก์เบื้องหลังเรียก render บ่อย) อัปเดตแค่แถบบน
@@ -286,8 +288,11 @@ function render() {
 
 
 const isReviewer = () => ['admin', 'accounting'].includes(S.session?.user.role);
-const FLAGS = { no_stops: 'ไม่มีจุดแวะ', backfilled_stop: 'เพิ่มจุดย้อนหลัง', stop_without_coords: 'จุดแวะไม่มีพิกัด', no_base: 'ไม่มีฐานที่อยู่', maps_unavailable: 'Maps ไม่พร้อม', maps_partial: 'Maps คำนวณบางส่วน', over_maps: 'เกินระยะ Maps', under_maps: 'ต่ำกว่า Maps มาก', odo_regress: 'ไมล์ย้อนจากวันก่อน', odo_gap_prev_day: 'ไมล์ไม่ต่อจากวันก่อน', duplicate_photo: 'ภาพซ้ำ', same_photo_start_end: 'ภาพเริ่ม=จบ' };
+const FLAGS = { no_stops: 'ไม่มีจุดแวะ', backfilled_stop: 'เพิ่มจุดย้อนหลัง', stop_without_coords: 'จุดแวะไม่มีพิกัด', no_base: 'ไม่มีฐานที่อยู่', maps_unavailable: 'Maps ไม่พร้อม', maps_partial: 'Maps คำนวณบางส่วน', over_maps: 'เกินระยะ Maps', under_maps: 'ต่ำกว่า Maps มาก', odo_regress: 'ไมล์ย้อนจากวันก่อน', odo_gap_prev_day: 'ไมล์ไม่ต่อจากวันก่อน', duplicate_photo: 'ภาพซ้ำ', same_photo_start_end: 'ภาพเริ่ม=จบ', gps_missing: 'ไม่มี GPS เริ่ม/จบ', stop_far_from_project: 'GPS จุดแวะห่างโครงการ' };
 const REV_ERR = { reason_required: 'ต้องใส่เหตุผล', not_submitted: 'ทริปนี้ไม่ได้อยู่ในสถานะรอตรวจแล้ว', invalid_km: 'ระยะทางไม่ถูกต้อง', already_paid: 'จ่ายเดือนนี้ให้คนนี้ไปแล้ว', trips_pending_review: 'ยังมีทริปรอตรวจ/ส่งกลับของคนนี้ในเดือนนี้', nothing_to_pay: 'ไม่มีทริปที่อนุมัติรอจ่าย', rate_missing: 'ไม่พบอัตราเบิกของทริปนี้' };
+const hav = (a, b) => { const R = 6371000, r = (d) => d * Math.PI / 180, dl = r(b.lat - a.lat), dg = r(b.lng - a.lng), h = Math.sin(dl / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dg / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(h)); };
+const fmtDist = (m) => (m >= 1000 ? (m / 1000).toFixed(1) + ' กม.' : Math.round(m) + ' ม.');
+const gpsLink = (lat, lng, label) => (lat != null ? `<a href="${mapLink(lat, lng)}" target="_blank" rel="noopener">${label}</a>` : '<span style="color:var(--warn)">ไม่มี GPS</span>');
 const flagChips = (fl) => (fl || []).map((f) => `<span class="chip warn">${FLAGS[f] || esc(f)}</span>`).join(' ');
 S.rvMonth = null;
 async function adminCall(method, path, body) {
@@ -299,6 +304,21 @@ async function adminCall(method, path, body) {
 }
 const monthTh = (m) => new Date(m + '-01T00:00:00Z').toLocaleDateString('th-TH', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 const shiftMonth = (m, n) => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7) - 1 + n, 1)).toISOString().slice(0, 7);
+
+/* ====== GPS ====== */
+function getGps(timeout = 10000) {
+  return new Promise((res) => {
+    if (!navigator.geolocation) return res(null);
+    navigator.geolocation.getCurrentPosition(
+      (p) => { const g = { lat: p.coords.latitude, lng: p.coords.longitude, acc: Math.round(p.coords.accuracy) }; S.lastGps = g; res(g); },
+      () => res(null), { enableHighAccuracy: true, timeout, maximumAge: 15000 });
+  });
+}
+const gpsText = (g) => (g ? `📍 ได้ตำแหน่งแล้ว (±${g.acc} ม.)` : '⚠️ ไม่ได้ตำแหน่ง GPS (เปิดสิทธิ์ตำแหน่งของเบราว์เซอร์) ส่งต่อได้ แต่ Admin จะเห็นว่าไม่มี GPS');
+function startGpsCapture() {
+  S.gps = null; const box = $('#gpsbox'); if (box) box.textContent = '⏳ กำลังหาตำแหน่ง GPS…';
+  S.gpsP = getGps(12000).then((g) => { S.gps = g; const b = $('#gpsbox'); if (b) b.textContent = gpsText(g); return g; });
+}
 
 /* ====== เลือกตำแหน่งจากแผนที่ (Google Maps JS + Places) ====== */
 let mapsJs = null;
@@ -314,7 +334,7 @@ function loadMapsJs() {
 }
 const hasPicker = () => !!CONFIG.MAPS_BROWSER_KEY;
 const pickBtn = (target) => (hasPicker() ? `<button class="sec" type="button" data-act="pickmap" data-target="${target}" style="margin-top:8px">📍 ค้นหาและปักหมุดบนแผนที่</button>` : '');
-function pickLocation(initText) {
+function pickLocation(initText, hint) {
   return new Promise(async (resolve) => {
     if (!navigator.onLine) { toast('ต้องออนไลน์'); return resolve(null); }
     const ov = document.createElement('div'); ov.id = 'picker';
@@ -330,7 +350,7 @@ function pickLocation(initText) {
       await loadMapsJs();
       const [{ Map }, { PlaceAutocompleteElement }, { AdvancedMarkerElement }] = await Promise.all([google.maps.importLibrary('maps'), google.maps.importLibrary('places'), google.maps.importLibrary('marker')]);
       const init = parseLatLng(initText);
-      const map = new Map(ov.querySelector('#pk_map'), { center: init || { lat: 14.993, lng: 103.1029 }, zoom: init ? 17 : 12, mapId: 'DEMO_MAP_ID', gestureHandling: 'greedy', streetViewControl: false, mapTypeControl: false, fullscreenControl: false });
+      const map = new Map(ov.querySelector('#pk_map'), { center: init || (hint && { lat: hint.lat, lng: hint.lng }) || { lat: 14.993, lng: 103.1029 }, zoom: init || hint ? 16 : 12, mapId: 'DEMO_MAP_ID', gestureHandling: 'greedy', streetViewControl: false, mapTypeControl: false, fullscreenControl: false });
       const marker = new AdvancedMarkerElement({ map, position: init || null, gmpDraggable: true });
       const set = (lat, lng, pan) => {
         cur = { lat: +lat.toFixed(6), lng: +lng.toFixed(6) }; marker.position = cur;
@@ -477,9 +497,10 @@ function renderRvTrip() {
   app.innerHTML = `${bar(fmtDate(t.trip_date), '#/review')}
   <div class="card"><div class="row"><b class="sp">${esc(S.rv?.queue?.find((q) => q.id === id)?.user_name || '')}</b>${chip(t.status)}</div>
     <div class="row" style="margin-top:8px"><div class="sp"><div class="mut">ระยะทางที่แจ้ง</div><div class="big">${kmf(t.actual_km)} กม.</div></div><div class="sp"><div class="mut">Google Maps</div><div class="big">${t.maps_km != null ? kmf(t.maps_km) : '-'}</div></div></div>
+    <div class="mut" style="margin-top:8px">จุดเริ่ม: ${gpsLink(t.start_lat, t.start_lng, '📍 เปิดแผนที่' + (t.start_acc != null ? ' (±' + t.start_acc + ' ม.)' : ''))} · จุดจบ: ${gpsLink(t.end_lat, t.end_lng, '📍 เปิดแผนที่' + (t.end_acc != null ? ' (±' + t.end_acc + ' ม.)' : ''))}</div>
     <div style="margin-top:8px">${flagChips(t.flags) || '<span class="mut">ไม่มีธงผิดปกติ</span>'}</div></div>
   <div class="card"><h2>ภาพเลขไมล์</h2>${ph('start', 'เริ่มต้น ')}${ph('end', 'สิ้นสุด ')}</div>
-  <div class="card"><h2>จุดแวะ (${stops.length})</h2>${stops.length ? `<ul class="list">${stops.map((s, i) => `<li><span class="num">${i + 1}</span><div class="sp"><b>${esc(s.project_code ? s.project_code + ' · ' + s.project_name : s.other_label)}</b><div class="mut">${PURPOSES[s.purpose_code] || ''} · ${fmtTime(s.client_arrived_at || s.arrived_at)}${s.is_backfilled ? ' · ย้อนหลัง' : ''}</div></div></li>`).join('')}</ul>` : '<div class="mut">ไม่มีจุดแวะ</div>'}</div>
+  <div class="card"><h2>จุดแวะ (${stops.length})</h2>${stops.length ? `<ul class="list">${stops.map((s, i) => `<li><span class="num">${i + 1}</span><div class="sp"><b>${esc(s.project_code ? s.project_code + ' · ' + s.project_name : s.other_label)}</b><div class="mut">${PURPOSES[s.purpose_code] || ''} · ${fmtTime(s.client_arrived_at || s.arrived_at)}${s.is_backfilled ? ' · ย้อนหลัง' : ''}${s.lat != null ? ' · ' + gpsLink(s.lat, s.lng, '📍' + (s.loc_source === 'pin' ? 'หมุดที่ปัก' : 'GPS')) + (s.project_lat != null ? ' (ห่างโครงการ ' + fmtDist(hav({ lat: s.lat, lng: s.lng }, { lat: s.project_lat, lng: s.project_lng })) + ')' : '') : ''}</div></div></li>`).join('')}</ul>` : '<div class="mut">ไม่มีจุดแวะ</div>'}</div>
   ${approvals.length ? `<div class="card"><h2>ประวัติ</h2><ul class="list">${approvals.map((a) => `<li><div class="sp"><b>${{ adjust_km: 'ปรับ km', admin_approve: 'อนุมัติ', return: 'ส่งกลับ' }[a.action] || a.action}</b> · ${esc(a.actor_name)}<div class="mut">${a.action === 'adjust_km' ? kmf(a.from_km) + ' → ' + kmf(a.to_km) + ' กม. · ' : ''}${esc(a.reason || '')}</div></div></li>`).join('')}</ul></div>` : ''}
   ${can ? `<div class="card"><h2>ตัดสินใจ</h2><label class="f" for="rv_km">ระยะทางที่อนุมัติ (กม.) · ${baht(t.rate_satang_km)} ฿/กม.</label><input id="rv_km" type="number" inputmode="decimal" step="0.1" min="0" value="${km}">
     <label class="f" for="rv_reason">เหตุผล (จำเป็นถ้าปรับ km หรือส่งกลับ)</label><input id="rv_reason" type="text" maxlength="300">
@@ -610,6 +631,7 @@ function renderStart() {
   app.innerHTML = `${bar('เริ่มเดินทาง', '#/')}
   <div class="card"><h2>1. ถ่ายภาพเลขไมล์</h2><label class="photo" id="photobox"><span>แตะเพื่อถ่ายภาพ</span><input type="file" accept="image/*" capture="environment" data-photo></label>
   <label class="f" for="odo">2. เลขไมล์ที่เห็นในภาพ (กม.)</label><input id="odo" class="odo" type="number" inputmode="numeric" min="0" placeholder="0"></div>
+  <div class="mut" id="gpsbox" style="margin:-4px 2px 12px">📍 เมื่อถ่ายภาพ ระบบจะบันทึกตำแหน่ง GPS เป็นจุดเริ่มต้นของวัน</div>
   <button data-act="dostart">ยืนยันและเริ่มเดินทาง</button>`;
 }
 
@@ -619,12 +641,13 @@ function renderEnd(t) {
   <div class="card"><h2>1. ถ่ายภาพเลขไมล์ตอนจบวัน</h2><label class="photo" id="photobox"><span>แตะเพื่อถ่ายภาพ</span><input type="file" accept="image/*" capture="environment" data-photo></label>
   <label class="f" for="odo">2. เลขไมล์ที่เห็นในภาพ (กม.)</label><input id="odo" class="odo" type="number" inputmode="numeric" min="0" placeholder="0" oninput="$('#dist').textContent=this.value?(Number(this.value)-${t.start_odometer}).toLocaleString('th-TH')+' กม.':'-'">
   <div class="mut" style="margin-top:8px">ระยะทางวันนี้: <b id="dist">-</b></div></div>
+  <div class="mut" id="gpsbox" style="margin:-4px 2px 12px">📍 เมื่อถ่ายภาพ ระบบจะบันทึกตำแหน่ง GPS เป็นจุดสิ้นสุดของวัน</div>
   <button data-act="doend" data-id="${t.id}">ยืนยันและส่งตรวจ</button>`;
 }
 
 function renderTrip(t) {
   const editable = t.status === 'draft' || t.status === 'returned';
-  const stops = (t.stops || []).map((s, i) => `<li><span class="num">${i + 1}</span><div class="sp"><b>${esc(s.label)}</b><div class="mut">${PURPOSES[s.purpose] || ''} · ${fmtTime(s.at)}</div></div>${editable ? `<button class="danger" data-act="delstop" data-id="${t.id}" data-sid="${s.id}">ลบ</button>` : ''}</li>`).join('');
+  const stops = (t.stops || []).map((s, i) => `<li><span class="num">${i + 1}</span><div class="sp"><b>${esc(s.label)}</b><div class="mut">${PURPOSES[s.purpose] || ''} · ${fmtTime(s.at)}${s.loc ? ' · 📍' + (s.loc === 'pin' ? 'หมุด' : 'GPS') : ''}</div></div>${editable ? `<button class="danger" data-act="delstop" data-id="${t.id}" data-sid="${s.id}">ลบ</button>` : ''}</li>`).join('');
   const opts = S.projects.map((p) => `<option value="${p.id}">${esc(p.code)} · ${esc(p.name)}</option>`).join('');
   const before = !S.freshForm && app.dataset.page === 'trip/' + t.id && document.getElementById('proj') ? snapForm() : null;
   S.freshForm = false;
@@ -638,6 +661,7 @@ function renderTrip(t) {
     <input id="pfilter" type="text" placeholder="ค้นหาโครงการ/รหัส" data-act-input="filter">
     <label class="f" for="proj">โครงการ / lead</label><select id="proj">${opts}<option value="">อื่น ๆ (พิมพ์เอง)</option></select>
     <div id="otherwrap" style="display:none"><label class="f" for="other">ชื่อสถานที่ (ห้ามใส่ชื่อบุคคล)</label><input id="other" type="text" maxlength="60"></div>
+    ${hasPicker() ? `<div style="margin:12px 0 0"><button class="sec" type="button" data-act="pinstop">📍 ปักหมุดเอง (แทน GPS)</button><div class="mut" style="margin-top:4px">${S.stopPin ? 'ใช้หมุดที่ปักไว้ ✓ <button class="ghost" type="button" data-act="clearpin">ล้าง</button>' : 'ถ้าไม่ปัก ระบบจะใช้ GPS ตอนกด "ถึงแล้ว"'}</div></div>` : ''}
     <label class="f" for="purpose">วัตถุประสงค์</label><select id="purpose">${Object.entries(PURPOSES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
     <label class="row" style="margin:12px 0"><input type="checkbox" id="back" style="width:20px;height:20px"> ลืมกดตอนถึง (เพิ่มย้อนหลัง)</label>
     <div id="backwrap" style="display:none;margin-bottom:12px"><label class="f" for="backtime">เวลาที่ถึงจริง</label><input id="backtime" type="time"></div>
@@ -687,10 +711,11 @@ const actions = {
     const prevEnd = Object.values(S.trips).filter((t) => t.end_odometer != null).sort((a, b) => b.trip_date.localeCompare(a.trip_date))[0]?.end_odometer;
     if (prevEnd != null && odo < prevEnd && !confirm(`เลขไมล์ ${odo.toLocaleString('th-TH')} น้อยกว่าวันก่อน (${prevEnd.toLocaleString('th-TH')}) ตรวจแล้วถูกต้องใช่ไหม?`)) return;
     el.disabled = true;
+    const gps = S.gps || (S.gpsP ? await S.gpsP : null);
     const id = uuid(), date = thaiToday();
     S.trips[id] = { id, trip_date: date, status: 'draft', start_odometer: odo, end_odometer: null, stops: [], photos: { start: true }, sync: 'pending' };
     await saveTrips();
-    await obAdd({ tripId: id, method: 'POST', path: '/trips/start', kind: 'json', body: { id, trip_date: date, start_odometer: odo } });
+    await obAdd({ tripId: id, method: 'POST', path: '/trips/start', kind: 'json', body: { id, trip_date: date, start_odometer: odo, ...(gps ? { gps } : {}) } });
     await obAdd({ tripId: id, method: 'PUT', path: `/trips/${id}/photo/start`, kind: 'photo', blob: S.draftPhoto.blob, ctype: 'image/jpeg' });
     S.draftPhoto = null; await refreshPending(); go('#/trip/' + id); flush();
   },
@@ -802,6 +827,10 @@ const actions = {
     if (llv) { c = parseLatLng(llv); if (!c) return toast('อ่านพิกัดไม่ได้ ลองรูปแบบ 14.9930, 103.1029'); if (!inThailand(c) && !confirm('พิกัดนี้อยู่นอกประเทศไทย ใช้ต่อไหม?')) return; }
     if (await saveUser(u, { base_label: label || null, base_lat: c?.lat ?? null, base_lng: c?.lng ?? null })) { toast('บันทึกฐานแล้ว'); await loadUsers(); }
   },
+  async pinstop() {
+    const r = await pickLocation('', S.lastGps); if (r) { S.stopPin = { lat: r.lat, lng: r.lng }; S.freshForm = false; render(); }
+  },
+  clearpin() { S.stopPin = null; render(); },
   async pickmap(el) {
     const input = $('#' + el.dataset.target); const r = await pickLocation(input.value);
     if (r) input.value = `${r.lat}, ${r.lng}`;
@@ -835,7 +864,14 @@ const actions = {
       at = new Date(`${t.trip_date}T${tm}:00+07:00`); body.backfilled = true;
     }
     body.client_arrived_at = at.toISOString();
-    t.stops = [...(t.stops || []), { id: body.id, label, purpose: body.purpose_code, at: body.client_arrived_at }].sort((a, b) => a.at.localeCompare(b.at));
+    el.disabled = true; const orig = el.textContent;
+    let loc = null;
+    if (S.stopPin) loc = { ...S.stopPin, source: 'pin' };
+    else if (!body.backfilled) { el.textContent = '⏳ กำลังหาตำแหน่ง…'; const g = await getGps(8000); if (g) loc = { ...g, source: 'gps' }; else toast('ไม่ได้ตำแหน่ง GPS บันทึกจุดนี้โดยไม่มีพิกัด'); }
+    el.disabled = false; el.textContent = orig;
+    if (loc) { body.lat = loc.lat; body.lng = loc.lng; if (loc.acc != null) body.acc = loc.acc; body.source = loc.source; }
+    S.stopPin = null;
+    t.stops = [...(t.stops || []), { id: body.id, label, purpose: body.purpose_code, at: body.client_arrived_at, loc: loc?.source || null }].sort((a, b) => a.at.localeCompare(b.at));
     await saveTrips(); S.freshForm = true;                 // บันทึกสำเร็จแล้ว: วาดฟอร์มใหม่ให้ว่าง ไม่คืนค่าเดิม
     await enqueue(id, 'POST', `/trips/${id}/stops`, body); toast('บันทึกจุดแวะแล้ว'); render();
   },
@@ -854,10 +890,11 @@ const actions = {
     const dist = odo - t.start_odometer;
     if (!confirm(`ระยะทางวันนี้ ${dist.toLocaleString('th-TH')} กม.${dist > 500 ? ' (มากกว่า 500 กม. ตรวจเลขไมล์อีกครั้ง)' : ''}\nส่งตรวจใช่ไหม? ส่งแล้วแก้ไขเองไม่ได้`)) return;
     el.disabled = true;
+    const gps = S.gps || (S.gpsP ? await S.gpsP : null);
     t.end_odometer = odo; t.status = 'submitted'; t.sync = 'pending'; t.actual_km = dist; t.approved_km = dist; t.photos = { ...t.photos, end: true };
     await saveTrips();
     await obAdd({ tripId: t.id, method: 'PUT', path: `/trips/${t.id}/photo/end`, kind: 'photo', blob: S.draftPhoto.blob, ctype: 'image/jpeg' });
-    await obAdd({ tripId: t.id, method: 'POST', path: `/trips/${t.id}/end`, kind: 'json', body: { end_odometer: odo } });
+    await obAdd({ tripId: t.id, method: 'POST', path: `/trips/${t.id}/end`, kind: 'json', body: { end_odometer: odo, ...(gps ? { gps } : {}) } });
     S.draftPhoto = null; await refreshPending(); go('#/'); flush();
   },
 };
