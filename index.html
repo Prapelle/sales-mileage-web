@@ -266,13 +266,15 @@ function render() {
   else if (name === 'trip' && S.trips[id]) { page = key; renderTrip(S.trips[id]); }
   else if (name === 'end' && S.trips[id]) { page = key; renderEnd(S.trips[id]); }
   else if (name === 'users' && S.session.user.role === 'admin') { page = 'users'; renderUsers(); }
-  else if (name === 'review' && S.session.user.role === 'admin') { page = 'review'; renderReview(); }
-  else if (name === 'rv' && S.session.user.role === 'admin') { page = 'rv/' + id; renderRvTrip(); }
+  else if (name === 'rates' && S.session.user.role === 'admin') { page = 'rates'; renderRates(); }
+  else if (name === 'review' && isReviewer()) { page = 'review'; renderReview(); }
+  else if (name === 'rv' && isReviewer()) { page = 'rv/' + id; renderRvTrip(); }
   else renderHome();
   app.dataset.page = page === 'start' ? 'start/' : page;
 }
 
 
+const isReviewer = () => ['admin', 'accounting'].includes(S.session?.user.role);
 const FLAGS = { no_stops: 'ไม่มีจุดแวะ', backfilled_stop: 'เพิ่มจุดย้อนหลัง', stop_without_coords: 'จุดแวะไม่มีพิกัด', no_base: 'ไม่มีฐานที่อยู่', maps_unavailable: 'Maps ไม่พร้อม', maps_partial: 'Maps คำนวณบางส่วน', over_maps: 'เกินระยะ Maps', under_maps: 'ต่ำกว่า Maps มาก', odo_regress: 'ไมล์ย้อนจากวันก่อน', odo_gap_prev_day: 'ไมล์ไม่ต่อจากวันก่อน', duplicate_photo: 'ภาพซ้ำ', same_photo_start_end: 'ภาพเริ่ม=จบ' };
 const REV_ERR = { reason_required: 'ต้องใส่เหตุผล', not_submitted: 'ทริปนี้ไม่ได้อยู่ในสถานะรอตรวจแล้ว', invalid_km: 'ระยะทางไม่ถูกต้อง', already_paid: 'จ่ายเดือนนี้ให้คนนี้ไปแล้ว', trips_pending_review: 'ยังมีทริปรอตรวจ/ส่งกลับของคนนี้ในเดือนนี้', nothing_to_pay: 'ไม่มีทริปที่อนุมัติรอจ่าย', rate_missing: 'ไม่พบอัตราเบิกของทริปนี้' };
 const flagChips = (fl) => (fl || []).map((f) => `<span class="chip warn">${FLAGS[f] || esc(f)}</span>`).join(' ');
@@ -286,6 +288,30 @@ async function adminCall(method, path, body) {
 }
 const monthTh = (m) => new Date(m + '-01T00:00:00Z').toLocaleDateString('th-TH', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 const shiftMonth = (m, n) => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7) - 1 + n, 1)).toISOString().slice(0, 7);
+
+async function loadRates() {
+  try { S.rates = (await apiGet('/admin/rates')).rates; } catch { S.rates = null; }
+  if (route().name === 'rates') renderRates();
+}
+function renderRates() {
+  if (S.rates === undefined) { S.rates = null; loadRates(); }
+  if (app.dataset.page === 'rates' && $('#rt_baht')) {            // อยู่หน้านี้แล้ว: อัปเดตเฉพาะรายการ ไม่ล้างช่องที่กำลังกรอก
+    const el = $('#rt_list'); if (el) el.innerHTML = ratesList(); return;
+  }
+  app.innerHTML = `${bar('อัตราเบิกต่อ กม.', '#/')}
+  <div class="card"><h2>ตั้งอัตราใหม่</h2>
+    <label class="f" for="rt_baht">บาทต่อ กม.</label><input id="rt_baht" type="number" inputmode="decimal" step="0.01" min="0.01" placeholder="5">
+    <label class="f" for="rt_date">มีผลตั้งแต่วันที่</label><input id="rt_date" type="date" value="${thaiToday()}" style="font:inherit;width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;min-height:48px">
+    <div class="mut" style="margin-top:8px">อัตราใหม่ใช้กับทริปที่มีวันที่ตั้งแต่วันที่มีผลเป็นต้นไป (คำนวณตอนกด "สิ้นสุดวัน") ทริปที่ส่งตรวจไปแล้วใช้อัตราเดิม ไม่ถูกแก้ย้อนหลัง</div>
+    <div style="margin-top:14px"><button data-act="addrate">บันทึกอัตรา</button></div></div>
+  <div class="card"><h2>อัตราที่ตั้งไว้</h2><div id="rt_list">${ratesList()}</div></div>`;
+}
+function ratesList() {
+  if (S.rates === null || S.rates === undefined) return '<div class="mut">กำลังโหลด...</div>';
+  if (!S.rates.length) return '<div class="mut">ยังไม่มีอัตรา</div>';
+  const cur = S.rates.find((r) => r.effective_from <= thaiToday());
+  return `<ul class="list">${S.rates.map((r) => `<li><div class="sp"><b>${baht(r.rate_satang_km)} ฿/กม.</b><div class="mut">มีผลตั้งแต่ ${new Date(r.effective_from + 'T00:00:00Z').toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}</div></div>${r === cur ? '<span class="chip ok">ใช้อยู่</span>' : r.effective_from > thaiToday() ? '<span class="chip warn">รอมีผล</span>' : ''}</li>`).join('')}</ul>`;
+}
 
 async function loadReview() {
   const m = S.rvMonth;
@@ -447,7 +473,8 @@ function renderHome() {
   const fails = S.failures.map((f, i) => `<div class="banner bad">ส่งข้อมูลไม่สำเร็จ${f.date ? ' (' + fmtDate(f.date) + ')' : ''}: ${esc(f.msg)} <button class="ghost" data-act="dismiss" data-i="${i}">ปิด</button></div>`).join('');
   app.innerHTML = `${bar('เบิกค่าเดินทาง')}${fails}
   <div class="row" style="margin-bottom:12px"><div class="sp"><b>${esc(S.session.user.name)}</b><div class="mut">${esc(S.session.user.email)}</div></div><button class="ghost" data-act="logout">ออก</button></div>
-  ${S.session.user.role === 'admin' ? '<a class="btn" href="#/review" style="display:block;text-align:center;text-decoration:none;margin-bottom:8px">ตรวจและจ่าย</a>' : ''}
+  ${isReviewer() ? '<a class="btn" href="#/review" style="display:block;text-align:center;text-decoration:none;margin-bottom:8px">ตรวจและจ่าย</a>' : ''}
+  ${S.session.user.role === 'admin' ? '<a class="btn sec" href="#/rates" style="display:block;text-align:center;text-decoration:none;margin-bottom:8px">อัตราเบิกต่อ กม. (Admin)</a>' : ''}
   ${S.session.user.role === 'admin' ? '<a class="btn sec" href="#/users" style="display:block;text-align:center;text-decoration:none;margin-bottom:12px">จัดการผู้ใช้ (Admin)</a>' : ''}
   <div class="grid2" style="margin-bottom:12px"><div class="card kpi" style="margin:0"><h2>ระยะทางเดือนนี้</h2><div class="big">${kmf(sumKm)} <span class="mut">กม.</span></div></div>
   <div class="card kpi" style="margin:0"><h2>ยอดเบิกเดือนนี้</h2><div class="big">${baht(sumAmt)} <span class="mut">฿</span></div></div></div>
@@ -595,6 +622,16 @@ const actions = {
     try { await buildReport(); } catch { return toast('สร้างรายงานไม่สำเร็จ'); }
     const old = document.title; document.title = 'สรุปค่าเดินทาง-' + S.rvMonth;
     window.print(); setTimeout(() => { document.title = old; }, 500);
+  },
+  async addrate(el) {
+    const baht_ = parseFloat($('#rt_baht').value), d = $('#rt_date').value;
+    if (!Number.isFinite(baht_) || baht_ <= 0 || baht_ > 1000) return toast('กรอกอัตราบาทต่อ กม. ให้ถูกต้อง');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return toast('เลือกวันที่มีผล');
+    if (!confirm(`ตั้งอัตรา ${baht_} บาท/กม. มีผลตั้งแต่ ${d}?`)) return;
+    el.disabled = true;
+    try { await adminCall('POST', '/admin/rates', { rate_baht_km: baht_, effective_from: d }); toast('บันทึกอัตราแล้ว'); $('#rt_baht').value = ''; await loadRates(); }
+    catch (e) { toast(e.code === 'rate_exists_for_date' ? 'มีอัตราของวันที่นี้อยู่แล้ว เลือกวันอื่น' : 'บันทึกไม่สำเร็จ (' + (e.code || e.message) + ')'); }
+    el.disabled = false;
   },
   async adduser(el) {
     const email = $('#u_email').value.trim().toLowerCase(), name = $('#u_name').value.trim(), role = $('#u_role').value;
