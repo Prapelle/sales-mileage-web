@@ -80,7 +80,7 @@ const ERR = {
   photos_required: 'ต้องมีภาพเลขไมล์ทั้งต้นวันและปลายวัน', end_less_than_start: 'เลขไมล์สิ้นสุดน้อยกว่าเลขไมล์เริ่มต้น',
   trip_exists_for_date: 'วันนี้มีรายการอยู่แล้วในระบบ', trip_locked: 'รายการนี้ส่งตรวจแล้ว แก้ไขไม่ได้',
   date_too_old: 'วันที่เก่าเกินกำหนด', date_in_future: 'วันที่เป็นอนาคต', project_not_found: 'ไม่พบโครงการนี้',
-  invalid_odometer: 'เลขไมล์ไม่ถูกต้อง', trip_not_found: 'ไม่พบรายการ', unsupported_image_type: 'ชนิดภาพไม่รองรับ',
+  invalid_odometer: 'เลขไมล์ไม่ถูกต้อง', trip_not_found: 'ไม่พบรายการ', sales_only: 'บัญชีนี้ไม่ใช่พนักงานขาย จึงเริ่มเดินทางไม่ได้', unsupported_image_type: 'ชนิดภาพไม่รองรับ',
   image_too_large: 'ภาพใหญ่เกินไป', forbidden: 'ไม่มีสิทธิ์', start_missing: 'ยังไม่มีเลขไมล์เริ่มต้น',
 };
 
@@ -341,7 +341,7 @@ function renderHome() {
     <div class="mut" style="margin:6px 0 10px">เริ่ม ${t.start_odometer?.toLocaleString('th-TH') ?? '-'} · จุดแวะ ${t.stops?.length ?? 0}</div>
     ${t.status === 'returned' ? `<div class="banner bad">${esc((t.approvals || []).filter((a) => a.action === 'return').pop()?.reason || 'Admin ส่งกลับให้แก้ไข')}</div>` : ''}
     <button data-act="open" data-id="${t.id}">ทำต่อ</button></div>`).join('')}
-  ${todayTrip ? '' : `<button data-act="startday" style="margin-bottom:14px;font-size:18px;min-height:56px">เริ่มเดินทาง</button>`}
+  ${todayTrip || S.session.user.role !== 'sales' ? '' : `<button data-act="startday" style="margin-bottom:14px;font-size:18px;min-height:56px">เริ่มเดินทาง</button>`}
   <div class="card"><h2>ประวัติ</h2>${all.length ? `<ul class="list">${all.map((t) => `<li><a href="#/trip/${t.id}"><div class="sp"><b>${fmtDate(t.trip_date)}</b><div class="mut">${t.actual_km != null ? kmf(t.approved_km ?? t.actual_km) + ' กม. · ' + baht(t.amount_satang) + ' ฿' : 'ยังไม่สรุป'}</div></div>${chip(t.status)}${t.sync === 'pending' ? '<span class="chip warn">รอซิงก์</span>' : ''}</a></li>`).join('')}</ul>` : '<div class="mut">ยังไม่มีรายการ</div>'}</div>`;
 }
 
