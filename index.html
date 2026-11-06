@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<title>เบิกค่าเดินทาง</title>
+<style>
+:root{--ink:#14201f;--mut:#5b6b69;--line:#d9e2e0;--bg:#f3f6f5;--card:#fff;--acc:#0f766e;--acc2:#115e59;--warn:#b45309;--bad:#b91c1c;--ok:#15803d}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Noto Sans Thai","Sarabun",sans-serif}
+#app{max-width:520px;margin:0 auto;padding:0 14px calc(28px + env(safe-area-inset-bottom))}
+header.top{position:sticky;top:0;z-index:5;background:var(--acc);color:#fff;margin:0 -14px 14px;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;display:flex;align-items:center;gap:10px}
+header.top h1{font-size:17px;margin:0;flex:1;font-weight:650}
+header.top .back{color:#fff;text-decoration:none;font-size:22px;line-height:1;padding:4px 8px 4px 0}
+.chip{display:inline-block;font-size:12px;padding:2px 9px;border-radius:99px;background:#e6efed;color:var(--acc2);white-space:nowrap}
+.chip.warn{background:#fef3c7;color:var(--warn)}.chip.bad{background:#fee2e2;color:var(--bad)}.chip.ok{background:#dcfce7;color:var(--ok)}
+header.top .chip{background:rgba(255,255,255,.2);color:#fff}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+.card h2{font-size:15px;margin:0 0 8px;color:var(--mut);font-weight:600}
+.row{display:flex;align-items:center;gap:10px}.sp{flex:1}
+.big{font-size:26px;font-weight:700;letter-spacing:-.3px}
+.mut{color:var(--mut);font-size:14px}
+button,.btn{font:inherit;border:0;border-radius:12px;padding:13px 16px;min-height:48px;background:var(--acc);color:#fff;font-weight:600;width:100%;cursor:pointer}
+button:active{background:var(--acc2)}button.sec{background:#e6efed;color:var(--acc2)}button.ghost{background:none;color:var(--mut);width:auto;min-height:0;padding:6px 8px;font-weight:500}
+button.danger{background:none;color:var(--bad);width:auto;min-height:0;padding:4px 8px}
+button:disabled{opacity:.5}
+label.f{display:block;font-size:14px;color:var(--mut);margin:12px 0 4px}
+input[type=text],input[type=number],input[type=time],select{font:inherit;width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;background:#fff;min-height:48px}
+input.odo{font-size:28px;font-weight:700;text-align:center;letter-spacing:1px}
+.photo{border:2px dashed #9db8b4;border-radius:14px;min-height:150px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:6px;color:var(--mut);cursor:pointer;overflow:hidden;background:#fafdfc}
+.photo img{width:100%;display:block}
+.photo input{display:none}
+.list{list-style:none;margin:0;padding:0}
+.list li{display:flex;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.list li:first-child{border-top:0}
+.list a{color:inherit;text-decoration:none;display:flex;gap:10px;align-items:center;flex:1}
+.num{width:26px;height:26px;border-radius:50%;background:var(--acc);color:#fff;display:grid;place-items:center;font-size:13px;flex:none}
+.banner{border-radius:12px;padding:10px 12px;margin-bottom:12px;font-size:14px}
+.banner.warn{background:#fef3c7;color:#78350f}.banner.bad{background:#fee2e2;color:#7f1d1d}
+#toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#14201f;color:#fff;padding:10px 16px;border-radius:99px;font-size:14px;max-width:90vw;opacity:0;pointer-events:none;transition:.2s;z-index:20}
+#toast.on{opacity:1}
+.center{text-align:center;padding-top:12vh}
+.center h1{font-size:24px;margin:0 0 6px}
+#gbtn{display:flex;justify-content:center;margin:22px 0 8px;min-height:44px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.kpi .big{font-size:22px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast"></div>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+'use strict';
+/* ====== ตั้งค่า: แก้ 2 ค่านี้หลัง deploy Worker ====== */
+const CONFIG = {
+  API_BASE: 'REPLACE_WITH_WORKER_URL',               // เช่น https://sales-mileage-api.xxx.workers.dev
+  GOOGLE_CLIENT_ID: 'REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID'
+};
+const API = (localStorage.getItem('mileage_api') || CONFIG.API_BASE).replace(/\/+$/, '');
+
+/* ====== helpers ====== */
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const thaiToday = () => new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 10);
+const fmtDate = (d) => new Date(d + 'T00:00:00Z').toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+const fmtTime = (iso) => (iso ? new Date(iso).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Bangkok' }) : '');
+const baht = (s) => ((s || 0) / 100).toLocaleString('th-TH', { maximumFractionDigits: 2 });
+const kmf = (n) => (Math.round((n || 0) * 10) / 10).toLocaleString('th-TH');
+const uuid = () => crypto.randomUUID();
+const STATUS = {
+  draft: ['ร่าง', ''], submitted: ['รอ Admin ตรวจ', 'warn'], returned: ['ส่งกลับให้แก้ไข', 'bad'],
+  admin_approved: ['Admin ตรวจแล้ว', 'ok'], manager_approved: ['ผู้จัดการอนุมัติ', 'ok'], paid: ['จ่ายแล้ว', 'ok'],
+};
+const PURPOSES = { visit: 'เข้าพบ', present: 'นำเสนอ', followup: 'ติดตาม', deliver: 'ส่งเอกสาร/ของ', other: 'อื่น ๆ' };
+const ERR = {
+  photos_required: 'ต้องมีภาพเลขไมล์ทั้งต้นวันและปลายวัน', end_less_than_start: 'เลขไมล์สิ้นสุดน้อยกว่าเลขไมล์เริ่มต้น',
+  trip_exists_for_date: 'วันนี้มีรายการอยู่แล้วในระบบ', trip_locked: 'รายการนี้ส่งตรวจแล้ว แก้ไขไม่ได้',
+  date_too_old: 'วันที่เก่าเกินกำหนด', date_in_future: 'วันที่เป็นอนาคต', project_not_found: 'ไม่พบโครงการนี้',
+  invalid_odometer: 'เลขไมล์ไม่ถูกต้อง', trip_not_found: 'ไม่พบรายการ', unsupported_image_type: 'ชนิดภาพไม่รองรับ',
+  image_too_large: 'ภาพใหญ่เกินไป', forbidden: 'ไม่มีสิทธิ์', start_missing: 'ยังไม่มีเลขไมล์เริ่มต้น',
+};
+
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('on');
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('on'), 2600);
+}
+
+/* ====== IndexedDB (cache + outbox) ====== */
+const DBP = new Promise((res, rej) => {
+  const r = indexedDB.open('mileage', 1);
+  r.onupgradeneeded = () => { const d = r.result; d.createObjectStore('kv'); d.createObjectStore('outbox', { keyPath: 'seq', autoIncrement: true }); };
+  r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+});
+async function tx(store, mode, fn) {
+  const d = await DBP;
+  return new Promise((res, rej) => {
+    const t = d.transaction(store, mode); const out = fn(t.objectStore(store));
+    t.oncomplete = () => res(out && 'result' in out ? out.result : undefined);
+    t.onerror = t.onabort = () => rej(t.error);
+  });
+}
+const kvGet = (k) => tx('kv', 'readonly', (s) => s.get(k));
+const kvSet = (k, v) => tx('kv', 'readwrite', (s) => { s.put(v, k); });
+const obAdd = (op) => tx('outbox', 'readwrite', (s) => { s.add(op); });
+const obAll = () => tx('outbox', 'readonly', (s) => s.getAll());
+const obDel = (seq) => tx('outbox', 'readwrite', (s) => { s.delete(seq); });
+
+/* ====== state ====== */
+const S = {
+  session: JSON.parse(localStorage.getItem('mileage_session') || 'null'),
+  trips: {}, projects: [], failures: [], pending: 0, draftPhoto: null, expired: false,
+};
+const saveTrips = () => kvSet('trips', S.trips);
+const saveFailures = () => kvSet('failures', S.failures);
+async function refreshPending() { S.pending = (await obAll()).length; }
+const hasPending = async (id) => (await obAll()).some((o) => o.tripId === id);
+
+/* ====== network ====== */
+const authHdr = () => ({ authorization: 'Bearer ' + S.session.token });
+function expire() {
+  localStorage.removeItem('mileage_session'); S.session = null; S.expired = true; render();
+}
+async function apiGet(path) {
+  const r = await fetch(API + path, { headers: authHdr() });
+  if (r.status === 401) { expire(); throw new Error('401'); }
+  if (!r.ok) throw Object.assign(new Error('http'), { status: r.status });
+  return r.json();
+}
+async function enqueue(tripId, method, path, body, blob, ctype) {
+  await obAdd({ tripId, method, path, kind: blob ? 'photo' : 'json', body, blob, ctype });
+  await refreshPending(); flush();
+}
+
+let flushing = false;
+async function flush() {
+  if (flushing || !navigator.onLine || !S.session) return;
+  flushing = true; const touched = new Set();
+  try {
+    for (const op of await obAll()) {
+      let res;
+      try {
+        const headers = authHdr(); let body;
+        if (op.kind === 'json') { headers['content-type'] = 'application/json'; body = JSON.stringify(op.body); }
+        else { headers['content-type'] = op.ctype; body = op.blob; }
+        res = await fetch(API + op.path, { method: op.method, headers, body });
+      } catch { break; }                                   // ออฟไลน์/เครือข่ายล้ม: เก็บไว้ลองใหม่
+      if (res.status === 401) { expire(); break; }
+      if (res.status >= 500 || res.status === 429) break;  // ฝั่งเซิร์ฟเวอร์มีปัญหา: ลองใหม่ภายหลัง
+      if (!res.ok) {                                       // 4xx: ล้มเหลวถาวร แจ้งผู้ใช้
+        const e = await res.json().catch(() => ({}));
+        S.failures.push({ msg: ERR[e.error] || e.error || 'ส่งข้อมูลไม่สำเร็จ', date: S.trips[op.tripId]?.trip_date, at: Date.now() });
+      }
+      await obDel(op.seq); touched.add(op.tripId);
+    }
+  } finally {
+    flushing = false; await refreshPending();
+    for (const id of touched) { if (!(await hasPending(id))) await refreshTrip(id).catch(() => {}); }
+    await saveFailures(); await saveTrips(); render();
+  }
+}
+
+function fromServer(d) {
+  const t = d.trip;
+  return {
+    id: t.id, trip_date: t.trip_date, status: t.status, start_odometer: t.start_odometer, end_odometer: t.end_odometer,
+    actual_km: t.actual_km, approved_km: t.approved_km, amount_satang: t.amount_satang,
+    stops: d.stops.map((s) => ({ id: s.id, label: s.project_code ? `${s.project_code} · ${s.project_name}` : s.other_label, purpose: s.purpose_code, at: s.client_arrived_at || s.arrived_at })),
+    photos: { start: d.photos.some((p) => p.kind === 'start'), end: d.photos.some((p) => p.kind === 'end') },
+    approvals: d.approvals, sync: 'ok',
+  };
+}
+async function refreshTrip(id) {
+  try { S.trips[id] = fromServer(await apiGet('/trips/' + id)); }
+  catch (e) { if (e.status === 404) delete S.trips[id]; else throw e; }
+}
+async function loadProjects() {
+  try { S.projects = (await apiGet('/projects')).projects; await kvSet('projects', S.projects); } catch {}
+}
+async function syncHome() {
+  if (!navigator.onLine || !S.session) return;
+  const m = thaiToday().slice(0, 7);
+  const prev = new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7) - 2, 1)).toISOString().slice(0, 7);
+  try {
+    const seen = new Set();
+    for (const month of [m, prev]) {
+      for (const t of (await apiGet('/trips?month=' + month)).trips) {
+        seen.add(t.id);
+        if (await hasPending(t.id)) continue;
+        const cur = S.trips[t.id] || { stops: [], photos: {} };
+        S.trips[t.id] = { ...cur, id: t.id, trip_date: t.trip_date, status: t.status, start_odometer: t.start_odometer, end_odometer: t.end_odometer, actual_km: t.actual_km, approved_km: t.approved_km, amount_satang: t.amount_satang, sync: 'ok' };
+      }
+    }
+    for (const t of Object.values(S.trips)) {                // รายการที่สร้างในเครื่องแต่ไม่มีบนเซิร์ฟเวอร์และไม่มีคิวค้าง = ล้มเหลว
+      if (t.sync === 'pending' && !seen.has(t.id) && !(await hasPending(t.id))) delete S.trips[t.id];
+    }
+    await saveTrips(); render();
+  } catch {}
+}
+
+/* ====== ภาพ ====== */
+async function compress(file) {
+  const bmp = await createImageBitmap(file);
+  const sc = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas'); c.width = Math.round(bmp.width * sc); c.height = Math.round(bmp.height * sc);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  return new Promise((r) => c.toBlob(r, 'image/jpeg', 0.72));
+}
+document.addEventListener('change', async (e) => {
+  const el = e.target;
+  if (!el.matches('input[data-photo]') || !el.files[0]) return;
+  try {
+    const blob = await compress(el.files[0]);
+    if (S.draftPhoto) URL.revokeObjectURL(S.draftPhoto.url);
+    S.draftPhoto = { blob, url: URL.createObjectURL(blob) };
+    const box = $('#photobox'); box.innerHTML = `<img src="${S.draftPhoto.url}" alt="ภาพเลขไมล์"><input type="file" accept="image/*" capture="environment" data-photo>`;
+  } catch { toast('อ่านภาพไม่สำเร็จ ลองถ่ายใหม่'); }
+});
+
+/* ====== หน้าจอ ====== */
+const app = $('#app');
+const route = () => { const [name, id] = location.hash.replace(/^#\/?/, '').split('/'); return { name: name || 'home', id }; };
+const go = (h) => { location.hash = h; };
+const bar = (title, back) => `<header class="top">${back ? `<a class="back" href="${back}" aria-label="กลับ">‹</a>` : ''}<h1>${esc(title)}</h1>${S.pending ? `<span class="chip">รอซิงก์ ${S.pending}</span>` : ''}${navigator.onLine ? '' : '<span class="chip">ออฟไลน์</span>'}</header>`;
+const chip = (st) => { const [t, c] = STATUS[st] || [st, '']; return `<span class="chip ${c}">${t}</span>`; };
+
+function render() {
+  const { name, id } = route();
+  S.draftPhoto = name === 'start' || name === 'end' ? S.draftPhoto : null;
+  if (!S.session) { app.dataset.page = 'login'; return renderLogin(); }
+  const key = name + '/' + (id || '');
+  // หน้าถ่ายภาพ/กรอกเลขไมล์: ห้ามวาดใหม่ระหว่างที่ผู้ใช้กำลังกรอก (ซิงก์เบื้องหลังเรียก render บ่อย) อัปเดตแค่แถบบน
+  if ((name === 'start' || (name === 'end' && S.trips[id])) && app.dataset.page === key && $('#odo')) {
+    const h = app.querySelector('header.top'); const tmp = document.createElement('div');
+    tmp.innerHTML = name === 'start' ? bar('เริ่มเดินทาง', '#/') : bar('สิ้นสุดวัน', '#/trip/' + id);
+    if (h) h.replaceWith(tmp.firstElementChild);
+    return;
+  }
+  let page = 'home';
+  if (name === 'start') { page = 'start'; renderStart(); }
+  else if (name === 'trip' && S.trips[id]) { page = key; renderTrip(S.trips[id]); }
+  else if (name === 'end' && S.trips[id]) { page = key; renderEnd(S.trips[id]); }
+  else renderHome();
+  app.dataset.page = page === 'start' ? 'start/' : page;
+}
+
+/* เก็บ/คืนค่าที่ผู้ใช้กรอกในฟอร์มจุดแวะ เมื่อหน้าถูกวาดใหม่ (เช่น ซิงก์เสร็จ) */
+function snapForm() {
+  const o = {};
+  for (const i of ['pfilter', 'proj', 'other', 'purpose', 'backtime']) { const e = document.getElementById(i); if (e) o[i] = e.value; }
+  const b = document.getElementById('back'); if (b) o.back = b.checked;
+  return o;
+}
+function restoreForm(o) {
+  if (!o) return;
+  const pf = document.getElementById('pfilter');
+  if (pf && o.pfilter) { pf.value = o.pfilter; pf.dispatchEvent(new Event('input')); }
+  for (const i of ['proj', 'other', 'purpose', 'backtime']) { const e = document.getElementById(i); if (e && o[i] !== undefined) e.value = o[i]; }
+  const b = document.getElementById('back'); if (b && o.back) { b.checked = true; b.dispatchEvent(new Event('change')); }
+  document.getElementById('proj')?.dispatchEvent(new Event('change'));
+}
+
+function renderLogin() {
+  app.innerHTML = `<div class="center"><h1>เบิกค่าเดินทาง</h1><div class="mut">เข้าสู่ระบบด้วยอีเมลบริษัท (Google)</div>
+    ${S.expired ? '<div class="banner warn" style="margin-top:16px">เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง ข้อมูลที่ยังไม่ส่งยังอยู่ในเครื่อง</div>' : ''}
+    <div id="gbtn"></div><div id="loginerr" class="mut" style="color:var(--bad)"></div></div>`;
+  const init = () => {
+    if (!window.google?.accounts?.id) return setTimeout(init, 300);
+    google.accounts.id.initialize({ client_id: CONFIG.GOOGLE_CLIENT_ID, callback: onCredential });
+    google.accounts.id.renderButton($('#gbtn'), { theme: 'outline', size: 'large', text: 'signin_with', locale: 'th' });
+  };
+  init();
+}
+async function onCredential(resp) {
+  try {
+    const r = await fetch(API + '/auth/google', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id_token: resp.credential }) });
+    const d = await r.json();
+    if (!r.ok) { $('#loginerr').textContent = d.error === 'not_whitelisted' ? 'อีเมลนี้ยังไม่ได้รับสิทธิ์ ติดต่อ Admin' : 'เข้าสู่ระบบไม่สำเร็จ (' + (d.error || r.status) + ')'; return; }
+    S.session = d; S.expired = false; localStorage.setItem('mileage_session', JSON.stringify(d));
+    boot();
+  } catch { $('#loginerr').textContent = 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้'; }
+}
+
+function renderHome() {
+  const today = thaiToday(), month = today.slice(0, 7);
+  const all = Object.values(S.trips).sort((a, b) => b.trip_date.localeCompare(a.trip_date));
+  const open = all.filter((t) => t.status === 'draft' || t.status === 'returned');
+  const done = all.filter((t) => t.trip_date.startsWith(month) && t.status !== 'draft' && t.approved_km != null);
+  const sumKm = done.reduce((a, t) => a + (t.approved_km || 0), 0), sumAmt = done.reduce((a, t) => a + (t.amount_satang || 0), 0);
+  const todayTrip = all.find((t) => t.trip_date === today);
+  const fails = S.failures.map((f, i) => `<div class="banner bad">ส่งข้อมูลไม่สำเร็จ${f.date ? ' (' + fmtDate(f.date) + ')' : ''}: ${esc(f.msg)} <button class="ghost" data-act="dismiss" data-i="${i}">ปิด</button></div>`).join('');
+  app.innerHTML = `${bar('เบิกค่าเดินทาง')}${fails}
+  <div class="row" style="margin-bottom:12px"><div class="sp"><b>${esc(S.session.user.name)}</b><div class="mut">${esc(S.session.user.email)}</div></div><button class="ghost" data-act="logout">ออก</button></div>
+  <div class="grid2" style="margin-bottom:12px"><div class="card kpi" style="margin:0"><h2>ระยะทางเดือนนี้</h2><div class="big">${kmf(sumKm)} <span class="mut">กม.</span></div></div>
+  <div class="card kpi" style="margin:0"><h2>ยอดเบิกเดือนนี้</h2><div class="big">${baht(sumAmt)} <span class="mut">฿</span></div></div></div>
+  ${open.map((t) => `<div class="card"><div class="row"><b>${fmtDate(t.trip_date)}</b>${chip(t.status)}<span class="sp"></span></div>
+    <div class="mut" style="margin:6px 0 10px">เริ่ม ${t.start_odometer?.toLocaleString('th-TH') ?? '-'} · จุดแวะ ${t.stops?.length ?? 0}</div>
+    ${t.status === 'returned' ? `<div class="banner bad">${esc((t.approvals || []).filter((a) => a.action === 'return').pop()?.reason || 'Admin ส่งกลับให้แก้ไข')}</div>` : ''}
+    <button data-act="open" data-id="${t.id}">ทำต่อ</button></div>`).join('')}
+  ${todayTrip ? '' : `<button data-act="startday" style="margin-bottom:14px;font-size:18px;min-height:56px">เริ่มเดินทาง</button>`}
+  <div class="card"><h2>ประวัติ</h2>${all.length ? `<ul class="list">${all.map((t) => `<li><a href="#/trip/${t.id}"><div class="sp"><b>${fmtDate(t.trip_date)}</b><div class="mut">${t.actual_km != null ? kmf(t.approved_km ?? t.actual_km) + ' กม. · ' + baht(t.amount_satang) + ' ฿' : 'ยังไม่สรุป'}</div></div>${chip(t.status)}${t.sync === 'pending' ? '<span class="chip warn">รอซิงก์</span>' : ''}</a></li>`).join('')}</ul>` : '<div class="mut">ยังไม่มีรายการ</div>'}</div>`;
+}
+
+function renderStart() {
+  app.innerHTML = `${bar('เริ่มเดินทาง', '#/')}
+  <div class="card"><h2>1. ถ่ายภาพเลขไมล์</h2><label class="photo" id="photobox"><span>แตะเพื่อถ่ายภาพ</span><input type="file" accept="image/*" capture="environment" data-photo></label>
+  <label class="f" for="odo">2. เลขไมล์ที่เห็นในภาพ (กม.)</label><input id="odo" class="odo" type="number" inputmode="numeric" min="0" placeholder="0"></div>
+  <button data-act="dostart">ยืนยันและเริ่มเดินทาง</button>`;
+}
+
+function renderEnd(t) {
+  app.innerHTML = `${bar('สิ้นสุดวัน', '#/trip/' + t.id)}
+  <div class="card"><div class="mut">เลขไมล์เริ่มต้น</div><div class="big">${t.start_odometer.toLocaleString('th-TH')}</div></div>
+  <div class="card"><h2>1. ถ่ายภาพเลขไมล์ตอนจบวัน</h2><label class="photo" id="photobox"><span>แตะเพื่อถ่ายภาพ</span><input type="file" accept="image/*" capture="environment" data-photo></label>
+  <label class="f" for="odo">2. เลขไมล์ที่เห็นในภาพ (กม.)</label><input id="odo" class="odo" type="number" inputmode="numeric" min="0" placeholder="0" oninput="$('#dist').textContent=this.value?(Number(this.value)-${t.start_odometer}).toLocaleString('th-TH')+' กม.':'-'">
+  <div class="mut" style="margin-top:8px">ระยะทางวันนี้: <b id="dist">-</b></div></div>
+  <button data-act="doend" data-id="${t.id}">ยืนยันและส่งตรวจ</button>`;
+}
+
+function renderTrip(t) {
+  const editable = t.status === 'draft' || t.status === 'returned';
+  const stops = (t.stops || []).map((s, i) => `<li><span class="num">${i + 1}</span><div class="sp"><b>${esc(s.label)}</b><div class="mut">${PURPOSES[s.purpose] || ''} · ${fmtTime(s.at)}</div></div>${editable ? `<button class="danger" data-act="delstop" data-id="${t.id}" data-sid="${s.id}">ลบ</button>` : ''}</li>`).join('');
+  const opts = S.projects.map((p) => `<option value="${p.id}">${esc(p.code)} · ${esc(p.name)}</option>`).join('');
+  const before = !S.freshForm && app.dataset.page === 'trip/' + t.id && document.getElementById('proj') ? snapForm() : null;
+  S.freshForm = false;
+  const focusId = before ? document.activeElement?.id : null;
+  const html = `${bar(fmtDate(t.trip_date), '#/')}
+  <div class="card"><div class="row">${chip(t.status)}${t.sync === 'pending' ? '<span class="chip warn">รอซิงก์</span>' : ''}<span class="sp"></span><span class="mut">เริ่ม ${t.start_odometer?.toLocaleString('th-TH')}${t.end_odometer != null ? ' → ' + t.end_odometer.toLocaleString('th-TH') : ''}</span></div>
+  ${t.actual_km != null ? `<div style="margin-top:10px" class="row"><div class="sp"><div class="mut">ระยะทาง</div><div class="big">${kmf(t.approved_km ?? t.actual_km)} กม.</div></div><div class="sp"><div class="mut">ค่าเดินทาง</div><div class="big">${baht(t.amount_satang)} ฿</div></div></div>` : ''}
+  ${t.status === 'returned' ? `<div class="banner bad" style="margin:10px 0 0">${esc((t.approvals || []).filter((a) => a.action === 'return').pop()?.reason || 'Admin ส่งกลับให้แก้ไข')}</div>` : ''}</div>
+  <div class="card"><h2>จุดแวะ (${(t.stops || []).length})</h2>${stops ? `<ul class="list">${stops}</ul>` : '<div class="mut">ยังไม่มีจุดแวะ</div>'}</div>
+  ${editable ? `<div class="card"><h2>เพิ่มจุดแวะ</h2>
+    <input id="pfilter" type="text" placeholder="ค้นหาโครงการ/รหัส" data-act-input="filter">
+    <label class="f" for="proj">โครงการ / lead</label><select id="proj">${opts}<option value="">อื่น ๆ (พิมพ์เอง)</option></select>
+    <div id="otherwrap" style="display:none"><label class="f" for="other">ชื่อสถานที่ (ห้ามใส่ชื่อบุคคล)</label><input id="other" type="text" maxlength="60"></div>
+    <label class="f" for="purpose">วัตถุประสงค์</label><select id="purpose">${Object.entries(PURPOSES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+    <label class="row" style="margin:12px 0"><input type="checkbox" id="back" style="width:20px;height:20px"> ลืมกดตอนถึง (เพิ่มย้อนหลัง)</label>
+    <div id="backwrap" style="display:none;margin-bottom:12px"><label class="f" for="backtime">เวลาที่ถึงจริง</label><input id="backtime" type="time"></div>
+    <button data-act="addstop" data-id="${t.id}">ถึงแล้ว บันทึกจุดนี้</button></div>
+  <button class="sec" data-act="toend" data-id="${t.id}" style="min-height:56px">สิ้นสุดวัน</button>` : ''}`;
+  if (!(before && app.dataset.sig === html)) {              // ถ้าเนื้อหาไม่เปลี่ยน ไม่ต้องวาดใหม่ (กันโฟกัส/คีย์บอร์ดหลุด)
+    app.innerHTML = html; app.dataset.sig = html;
+    if (editable) {
+      wireTripForm(); restoreForm(before);
+      const f = focusId && document.getElementById(focusId); if (f && f.focus) f.focus();
+    }
+  }
+  if (navigator.onLine && !flushing) refreshOnOpen(t.id);
+}
+async function refreshOnOpen(id) {
+  if (await hasPending(id)) return;
+  const before = JSON.stringify(S.trips[id]);
+  try { await refreshTrip(id); } catch { return; }
+  if (S.trips[id] && JSON.stringify(S.trips[id]) !== before && route().name === 'trip' && route().id === id) { await saveTrips(); renderTrip(S.trips[id]); }
+}
+function wireTripForm() {
+  const sel = $('#proj'), other = $('#otherwrap');
+  const sync = () => { other.style.display = sel.value === '' ? 'block' : 'none'; };
+  sel.addEventListener('change', sync); sync();
+  $('#back').addEventListener('change', (e) => { $('#backwrap').style.display = e.target.checked ? 'block' : 'none'; });
+  $('#pfilter').addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    sel.innerHTML = S.projects.filter((p) => !q || (p.code + ' ' + p.name).toLowerCase().includes(q)).map((p) => `<option value="${p.id}">${esc(p.code)} · ${esc(p.name)}</option>`).join('') + '<option value="">อื่น ๆ (พิมพ์เอง)</option>';
+    sync();
+  });
+}
+
+/* ====== actions ====== */
+const odoVal = () => { const v = $('#odo').value.trim(); const n = Number(v); return v !== '' && Number.isInteger(n) && n >= 0 && n <= 9999999 ? n : null; };
+const actions = {
+  startday() { go('#/start'); },
+  open(el) { go('#/trip/' + el.dataset.id); },
+  toend(el) { go('#/end/' + el.dataset.id); },
+  dismiss(el) { S.failures.splice(+el.dataset.i, 1); saveFailures(); render(); },
+  logout() { if (S.pending && !confirm('มีข้อมูลที่ยังไม่ได้ส่ง ถ้าออกจากระบบ ข้อมูลจะยังอยู่ในเครื่องและส่งได้เมื่อเข้าสู่ระบบอีกครั้ง ออกจากระบบใช่ไหม?')) return; localStorage.removeItem('mileage_session'); S.session = null; render(); },
+
+  async dostart(el) {
+    const odo = odoVal();
+    if (!S.draftPhoto) return toast('ถ่ายภาพเลขไมล์ก่อน');
+    if (odo === null) return toast('กรอกเลขไมล์ให้ถูกต้อง');
+    const prevEnd = Object.values(S.trips).filter((t) => t.end_odometer != null).sort((a, b) => b.trip_date.localeCompare(a.trip_date))[0]?.end_odometer;
+    if (prevEnd != null && odo < prevEnd && !confirm(`เลขไมล์ ${odo.toLocaleString('th-TH')} น้อยกว่าวันก่อน (${prevEnd.toLocaleString('th-TH')}) ตรวจแล้วถูกต้องใช่ไหม?`)) return;
+    el.disabled = true;
+    const id = uuid(), date = thaiToday();
+    S.trips[id] = { id, trip_date: date, status: 'draft', start_odometer: odo, end_odometer: null, stops: [], photos: { start: true }, sync: 'pending' };
+    await saveTrips();
+    await obAdd({ tripId: id, method: 'POST', path: '/trips/start', kind: 'json', body: { id, trip_date: date, start_odometer: odo } });
+    await obAdd({ tripId: id, method: 'PUT', path: `/trips/${id}/photo/start`, kind: 'photo', blob: S.draftPhoto.blob, ctype: 'image/jpeg' });
+    S.draftPhoto = null; await refreshPending(); go('#/trip/' + id); flush();
+  },
+
+  async addstop(el) {
+    const id = el.dataset.id, t = S.trips[id];
+    const pid = $('#proj').value, other = $('#other')?.value.trim() || '';
+    const body = { id: uuid(), purpose_code: $('#purpose').value };
+    let label;
+    if (pid) { body.project_id = pid; const p = S.projects.find((x) => x.id === pid); label = `${p.code} · ${p.name}`; }
+    else { if (!other) return toast('พิมพ์ชื่อสถานที่'); body.other_label = other; label = other; }
+    let at = new Date();
+    if ($('#back').checked) {
+      const tm = $('#backtime').value; if (!tm) return toast('เลือกเวลาที่ถึงจริง');
+      at = new Date(`${t.trip_date}T${tm}:00+07:00`); body.backfilled = true;
+    }
+    body.client_arrived_at = at.toISOString();
+    t.stops = [...(t.stops || []), { id: body.id, label, purpose: body.purpose_code, at: body.client_arrived_at }].sort((a, b) => a.at.localeCompare(b.at));
+    await saveTrips(); S.freshForm = true;                 // บันทึกสำเร็จแล้ว: วาดฟอร์มใหม่ให้ว่าง ไม่คืนค่าเดิม
+    await enqueue(id, 'POST', `/trips/${id}/stops`, body); toast('บันทึกจุดแวะแล้ว'); render();
+  },
+
+  async delstop(el) {
+    if (!confirm('ลบจุดแวะนี้?')) return;
+    const t = S.trips[el.dataset.id]; t.stops = t.stops.filter((s) => s.id !== el.dataset.sid);
+    await saveTrips(); await enqueue(t.id, 'DELETE', `/trips/${t.id}/stops/${el.dataset.sid}`); render();
+  },
+
+  async doend(el) {
+    const t = S.trips[el.dataset.id], odo = odoVal();
+    if (!S.draftPhoto) return toast('ถ่ายภาพเลขไมล์ก่อน');
+    if (odo === null) return toast('กรอกเลขไมล์ให้ถูกต้อง');
+    if (odo < t.start_odometer) return toast('เลขไมล์สิ้นสุดน้อยกว่าเลขไมล์เริ่มต้น');
+    const dist = odo - t.start_odometer;
+    if (!confirm(`ระยะทางวันนี้ ${dist.toLocaleString('th-TH')} กม.${dist > 500 ? ' (มากกว่า 500 กม. ตรวจเลขไมล์อีกครั้ง)' : ''}\nส่งตรวจใช่ไหม? ส่งแล้วแก้ไขเองไม่ได้`)) return;
+    el.disabled = true;
+    t.end_odometer = odo; t.status = 'submitted'; t.sync = 'pending'; t.actual_km = dist; t.approved_km = dist; t.photos = { ...t.photos, end: true };
+    await saveTrips();
+    await obAdd({ tripId: t.id, method: 'PUT', path: `/trips/${t.id}/photo/end`, kind: 'photo', blob: S.draftPhoto.blob, ctype: 'image/jpeg' });
+    await obAdd({ tripId: t.id, method: 'POST', path: `/trips/${t.id}/end`, kind: 'json', body: { end_odometer: odo } });
+    S.draftPhoto = null; await refreshPending(); go('#/'); flush();
+  },
+};
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-act]');
+  if (el && actions[el.dataset.act]) actions[el.dataset.act](el);
+});
+window.addEventListener('hashchange', render);
+window.addEventListener('online', () => { flush().then(syncHome); render(); });
+window.addEventListener('offline', render);
+
+/* ====== เริ่มต้น ====== */
+async function boot() {
+  S.trips = (await kvGet('trips')) || {}; S.projects = (await kvGet('projects')) || []; S.failures = (await kvGet('failures')) || [];
+  await refreshPending(); render();
+  if (S.session && navigator.onLine) { await loadProjects(); await flush(); await syncHome(); render(); }
+}
+boot();
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
