@@ -61,6 +61,14 @@ input.odo{font-size:28px;font-weight:700;text-align:center;letter-spacing:1px}
   .rpt section{break-inside:avoid}
   @page{size:A4;margin:14mm}
 }
+
+#picker{position:fixed;inset:0;z-index:50;background:#fff;display:flex;flex-direction:column}
+#picker .ph{display:flex;align-items:center;gap:8px;padding:calc(8px + env(safe-area-inset-top)) 10px 8px;background:var(--acc);color:#fff}
+#picker .ph b{flex:1}#picker .ph button{width:auto;min-height:0;padding:6px 10px;background:rgba(255,255,255,.2)}
+#pk_search{padding:8px 10px}#pk_search gmp-place-autocomplete{width:100%}
+#pk_map{flex:1;min-height:200px}
+#picker .pf{padding:10px 12px calc(10px + env(safe-area-inset-bottom));border-top:1px solid var(--line)}
+#pk_err{color:var(--bad);padding:8px 12px;font-size:14px}
 </style>
 </head>
 <body>
@@ -73,7 +81,9 @@ input.odo{font-size:28px;font-weight:700;text-align:center;letter-spacing:1px}
 /* ====== ตั้งค่า: แก้ 2 ค่านี้หลัง deploy Worker ====== */
 const CONFIG = {
   API_BASE: 'https://sales-mileage-api.jsuparkit.workers.dev',               // เช่น https://sales-mileage-api.xxx.workers.dev
-  GOOGLE_CLIENT_ID: '665164861966-p9m4grv3ijucjdt5ehpbv31l6b1q46ng.apps.googleusercontent.com'
+  GOOGLE_CLIENT_ID: '665164861966-p9m4grv3ijucjdt5ehpbv31l6b1q46ng.apps.googleusercontent.com',
+  // คีย์ Google Maps สำหรับ "เลือกจากแผนที่" (Maps JavaScript API + Places API (New)) ต้องจำกัด HTTP referrer เป็น https://prapelle.github.io/* เว้นว่าง = ซ่อนปุ่มเลือกจากแผนที่
+  MAPS_BROWSER_KEY: ''
 };
 const API = (localStorage.getItem('mileage_api') || CONFIG.API_BASE).replace(/\/+$/, '');
 
@@ -290,6 +300,58 @@ async function adminCall(method, path, body) {
 const monthTh = (m) => new Date(m + '-01T00:00:00Z').toLocaleDateString('th-TH', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 const shiftMonth = (m, n) => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7) - 1 + n, 1)).toISOString().slice(0, 7);
 
+/* ====== เลือกตำแหน่งจากแผนที่ (Google Maps JS + Places) ====== */
+let mapsJs = null;
+function loadMapsJs() {
+  if (mapsJs) return mapsJs;
+  mapsJs = new Promise((res, rej) => {
+    const sc = document.createElement('script');
+    sc.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(CONFIG.MAPS_BROWSER_KEY) + '&v=weekly&loading=async&language=th&region=TH';
+    sc.async = true; sc.onload = () => res(); sc.onerror = () => { mapsJs = null; rej(new Error('load')); };
+    document.head.appendChild(sc);
+  });
+  return mapsJs;
+}
+const hasPicker = () => !!CONFIG.MAPS_BROWSER_KEY;
+const pickBtn = (target) => (hasPicker() ? `<button class="sec" type="button" data-act="pickmap" data-target="${target}" style="margin-top:8px">📍 ค้นหาและปักหมุดบนแผนที่</button>` : '');
+function pickLocation(initText) {
+  return new Promise(async (resolve) => {
+    if (!navigator.onLine) { toast('ต้องออนไลน์'); return resolve(null); }
+    const ov = document.createElement('div'); ov.id = 'picker';
+    ov.innerHTML = `<div class="ph"><button type="button" data-pk="close">ยกเลิก</button><b>ค้นหา / แตะแผนที่เพื่อปักหมุด</b></div><div id="pk_search"></div><div id="pk_err"></div><div id="pk_map"></div>
+      <div class="pf"><div class="mut" id="pk_txt" style="margin-bottom:8px">ยังไม่ได้เลือกตำแหน่ง</div><button type="button" data-pk="ok" disabled>ใช้ตำแหน่งนี้</button></div>`;
+    document.body.appendChild(ov);
+    let cur = null; const done = (v) => { ov.remove(); resolve(v); };
+    ov.querySelector('[data-pk=close]').onclick = () => done(null);
+    ov.querySelector('[data-pk=ok]').onclick = () => done(cur);
+    const err = (m) => { ov.querySelector('#pk_err').textContent = m; };
+    window.gm_authFailure = () => err('ใช้ API key ไม่ได้: ตรวจว่าเปิด Maps JavaScript API และ Places API (New) แล้ว และ referrer ตรงกับ https://prapelle.github.io/*');
+    try {
+      await loadMapsJs();
+      const [{ Map }, { PlaceAutocompleteElement }, { AdvancedMarkerElement }] = await Promise.all([google.maps.importLibrary('maps'), google.maps.importLibrary('places'), google.maps.importLibrary('marker')]);
+      const init = parseLatLng(initText);
+      const map = new Map(ov.querySelector('#pk_map'), { center: init || { lat: 14.993, lng: 103.1029 }, zoom: init ? 17 : 12, mapId: 'DEMO_MAP_ID', gestureHandling: 'greedy', streetViewControl: false, mapTypeControl: false, fullscreenControl: false });
+      const marker = new AdvancedMarkerElement({ map, position: init || null, gmpDraggable: true });
+      const set = (lat, lng, pan) => {
+        cur = { lat: +lat.toFixed(6), lng: +lng.toFixed(6) }; marker.position = cur;
+        ov.querySelector('#pk_txt').textContent = `📍 ${cur.lat}, ${cur.lng}`; ov.querySelector('[data-pk=ok]').disabled = false;
+        if (pan) { map.panTo(cur); map.setZoom(17); }
+      };
+      if (init) set(init.lat, init.lng, false);
+      map.addListener('click', (e) => set(e.latLng.lat(), e.latLng.lng(), false));
+      marker.addListener('dragend', () => { const q = marker.position; set(typeof q.lat === 'function' ? q.lat() : q.lat, typeof q.lng === 'function' ? q.lng() : q.lng, false); });
+      const pac = new PlaceAutocompleteElement(); pac.includedRegionCodes = ['th'];
+      ov.querySelector('#pk_search').appendChild(pac);
+      pac.addEventListener('gmp-select', async ({ placePrediction }) => {
+        try {
+          const place = placePrediction.toPlace(); await place.fetchFields({ fields: ['displayName', 'location'] });
+          const l = place.location; set(typeof l.lat === 'function' ? l.lat() : l.lat, typeof l.lng === 'function' ? l.lng() : l.lng, true);
+        } catch { err('ดึงตำแหน่งของสถานที่นี้ไม่ได้ ลองแตะบนแผนที่แทน'); }
+      });
+    } catch { err('โหลดแผนที่ไม่สำเร็จ ตรวจอินเทอร์เน็ตและ API key หรือปิดแล้ววางพิกัดเอง'); }
+  });
+}
+
 /* ====== พิกัด / Google Maps ====== */
 function parseLatLng(str) {
   let s = (str || '').trim(); try { s = decodeURIComponent(s); } catch {}
@@ -323,7 +385,7 @@ function renderProjects() {
   <div class="card"><h2 id="pj_title">เพิ่ม / แก้ไขโครงการ</h2>
     <label class="f" for="pj_code">รหัส (ถ้ารหัสซ้ำ = แก้ไขของเดิม)</label><input id="pj_code" type="text" maxlength="40">
     <label class="f" for="pj_name">ชื่อโครงการ (ห้ามใส่ชื่อบุคคล)</label><input id="pj_name" type="text" maxlength="120">
-    <label class="f" for="pj_ll">พิกัด (ไม่บังคับ แต่จำเป็นต่อการเทียบ Maps)</label><input id="pj_ll" type="text" placeholder="14.9930, 103.1029">
+    <label class="f" for="pj_ll">พิกัด (ไม่บังคับ แต่จำเป็นต่อการเทียบ Maps)</label><input id="pj_ll" type="text" placeholder="14.9930, 103.1029">${pickBtn('pj_ll')}
     <div class="mut" style="margin-top:4px">${COORD_HELP}</div>
     <label class="f" for="pj_hint">หมายเหตุที่ตั้ง (เช่น อำเภอ)</label><input id="pj_hint" type="text" maxlength="120">
     <div style="margin-top:14px;display:grid;gap:8px"><button data-act="pjsave">บันทึกโครงการ</button></div></div>
@@ -460,7 +522,7 @@ function renderUsers() {
   ${list && list.length ? `<div class="card"><h2>ฐานที่อยู่พนักงาน (จุดเริ่มและกลับ ใช้คำนวณ Maps)</h2>
     <label class="f" for="b_user">พนักงาน</label><select id="b_user" data-act-change="basesel">${list.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
     <label class="f" for="b_label">ชื่อฐาน (เช่น บ้าน, สำนักงาน)</label><input id="b_label" type="text" maxlength="60" value="${esc(list[0].base_label || '')}">
-    <label class="f" for="b_ll">พิกัดฐาน</label><input id="b_ll" type="text" placeholder="14.9930, 103.1029" value="${list[0].base_lat != null ? list[0].base_lat + ', ' + list[0].base_lng : ''}">
+    <label class="f" for="b_ll">พิกัดฐาน</label><input id="b_ll" type="text" placeholder="14.9930, 103.1029" value="${list[0].base_lat != null ? list[0].base_lat + ', ' + list[0].base_lng : ''}">${pickBtn('b_ll')}
     <div class="mut" style="margin-top:4px">${COORD_HELP}</div>
     <div style="margin-top:12px"><button data-act="savebase">บันทึกฐาน</button></div></div>` : ''}
   <div class="card"><h2>ผู้ใช้ทั้งหมด</h2>${list === null ? `<div class="mut">${esc(S.usersErr || 'กำลังโหลด...')}</div>` : list.length ? `<ul class="list">${list.map((u) => `<li><div class="sp"><b>${esc(u.name)}</b><div class="mut">${esc(u.email)}${u.role === 'sales' ? (u.base_lat != null ? ' · ฐาน ✓' : ' · <span style="color:var(--warn)">ยังไม่ตั้งฐาน</span>') : ''}</div></div>
@@ -739,6 +801,10 @@ const actions = {
     let c = null;
     if (llv) { c = parseLatLng(llv); if (!c) return toast('อ่านพิกัดไม่ได้ ลองรูปแบบ 14.9930, 103.1029'); if (!inThailand(c) && !confirm('พิกัดนี้อยู่นอกประเทศไทย ใช้ต่อไหม?')) return; }
     if (await saveUser(u, { base_label: label || null, base_lat: c?.lat ?? null, base_lng: c?.lng ?? null })) { toast('บันทึกฐานแล้ว'); await loadUsers(); }
+  },
+  async pickmap(el) {
+    const input = $('#' + el.dataset.target); const r = await pickLocation(input.value);
+    if (r) input.value = `${r.lat}, ${r.lng}`;
   },
   async adduser(el) {
     const email = $('#u_email').value.trim().toLowerCase(), name = $('#u_name').value.trim(), role = $('#u_role').value;
