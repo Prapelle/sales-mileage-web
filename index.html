@@ -47,10 +47,25 @@ input.odo{font-size:28px;font-weight:700;text-align:center;letter-spacing:1px}
 #gbtn{display:flex;justify-content:center;margin:22px 0 8px;min-height:44px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .kpi .big{font-size:22px}
+
+.tbl{width:100%;border-collapse:collapse;font-size:14px}.tbl th,.tbl td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.tbl th{color:var(--mut);font-weight:600}.tbl .r{text-align:right;white-space:nowrap}
+.shot{width:100%;border-radius:10px;border:1px solid var(--line);display:block;background:#eef2f1;min-height:80px}
+.rpt{display:none}
+@media print{
+  body{background:#fff;font-size:12px}#app,#toast{display:none!important}
+  .rpt{display:block!important;max-width:none;padding:0}
+  .rpt h1{font-size:18px;margin:0 0 4px}.rpt h2{font-size:14px;margin:18px 0 6px;color:#000}
+  .rpt .tbl{font-size:11px}.rpt .tbl th,.rpt .tbl td{border-bottom:1px solid #999}
+  .rpt .sig{display:flex;gap:40px;margin-top:48px}.rpt .sig div{flex:1;border-top:1px solid #000;padding-top:4px;text-align:center}
+  .rpt section{break-inside:avoid}
+  @page{size:A4;margin:14mm}
+}
 </style>
 </head>
 <body>
 <div id="app"></div>
+<div id="rpt" class="rpt"></div>
 <div id="toast"></div>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
@@ -240,6 +255,7 @@ function render() {
     if (h) h.replaceWith(tmp.firstElementChild);
     return;
   }
+  if (name === 'rv' && app.dataset.page === 'rv/' + id && $('#rv_km')) return;
   if (name === 'users' && app.dataset.page === 'users' && $('#u_email')) {
     const h = app.querySelector('header.top'); const tmp = document.createElement('div');
     tmp.innerHTML = bar('จัดการผู้ใช้', '#/'); if (h) h.replaceWith(tmp.firstElementChild);
@@ -250,10 +266,106 @@ function render() {
   else if (name === 'trip' && S.trips[id]) { page = key; renderTrip(S.trips[id]); }
   else if (name === 'end' && S.trips[id]) { page = key; renderEnd(S.trips[id]); }
   else if (name === 'users' && S.session.user.role === 'admin') { page = 'users'; renderUsers(); }
+  else if (name === 'review' && S.session.user.role === 'admin') { page = 'review'; renderReview(); }
+  else if (name === 'rv' && S.session.user.role === 'admin') { page = 'rv/' + id; renderRvTrip(); }
   else renderHome();
   app.dataset.page = page === 'start' ? 'start/' : page;
 }
 
+
+const FLAGS = { no_stops: 'ไม่มีจุดแวะ', backfilled_stop: 'เพิ่มจุดย้อนหลัง', stop_without_coords: 'จุดแวะไม่มีพิกัด', no_base: 'ไม่มีฐานที่อยู่', maps_unavailable: 'Maps ไม่พร้อม', maps_partial: 'Maps คำนวณบางส่วน', over_maps: 'เกินระยะ Maps', under_maps: 'ต่ำกว่า Maps มาก', odo_regress: 'ไมล์ย้อนจากวันก่อน', odo_gap_prev_day: 'ไมล์ไม่ต่อจากวันก่อน', duplicate_photo: 'ภาพซ้ำ', same_photo_start_end: 'ภาพเริ่ม=จบ' };
+const REV_ERR = { reason_required: 'ต้องใส่เหตุผล', not_submitted: 'ทริปนี้ไม่ได้อยู่ในสถานะรอตรวจแล้ว', invalid_km: 'ระยะทางไม่ถูกต้อง', already_paid: 'จ่ายเดือนนี้ให้คนนี้ไปแล้ว', trips_pending_review: 'ยังมีทริปรอตรวจ/ส่งกลับของคนนี้ในเดือนนี้', nothing_to_pay: 'ไม่มีทริปที่อนุมัติรอจ่าย', rate_missing: 'ไม่พบอัตราเบิกของทริปนี้' };
+const flagChips = (fl) => (fl || []).map((f) => `<span class="chip warn">${FLAGS[f] || esc(f)}</span>`).join(' ');
+S.rvMonth = null;
+async function adminCall(method, path, body) {
+  const r = await fetch(API + path, { method, headers: { ...authHdr(), ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  if (r.status === 401) { expire(); throw new Error('401'); }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(d.error || 'http'), { code: d.error, status: r.status });
+  return d;
+}
+const monthTh = (m) => new Date(m + '-01T00:00:00Z').toLocaleDateString('th-TH', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+const shiftMonth = (m, n) => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7) - 1 + n, 1)).toISOString().slice(0, 7);
+
+async function loadReview() {
+  const m = S.rvMonth;
+  try {
+    const [q, sum] = await Promise.all([apiGet('/admin/trips?status=submitted'), apiGet('/admin/summary?month=' + m)]);
+    S.rv = { month: m, queue: q.trips, sum };
+  } catch (e) { S.rv = { month: m, err: 'โหลดข้อมูลไม่สำเร็จ' }; }
+  if (route().name === 'review') renderReview();
+}
+function renderReview() {
+  if (!S.rvMonth) S.rvMonth = thaiToday().slice(0, 7);
+  if (!S.rv || S.rv.month !== S.rvMonth) { S.rv = null; loadReview(); }
+  const rv = S.rv;
+  let body = '<div class="card"><div class="mut">กำลังโหลด...</div></div>';
+  if (rv?.err) body = `<div class="banner bad">${rv.err}</div>`;
+  else if (rv) {
+    const paid = new Map(rv.sum.payments.map((p) => [p.user_id, p]));
+    body = `<div class="card"><h2>รอตรวจ (${rv.queue.length})</h2>${rv.queue.length ? `<ul class="list">${rv.queue.map((t) => `<li><a href="#/rv/${t.id}"><div class="sp"><b>${esc(t.user_name)}</b> · ${fmtDate(t.trip_date)}<div class="mut">${kmf(t.approved_km ?? t.actual_km)} กม. · ${baht(t.amount_satang)} ฿</div>${flagChips(t.flags)}</div><span>›</span></a></li>`).join('')}</ul>` : '<div class="mut">ไม่มีรายการรอตรวจ</div>'}</div>
+    <div class="row" style="margin:6px 0 10px"><button class="ghost" data-act="rvmonth" data-d="-1">‹</button><b class="sp" style="text-align:center">${monthTh(S.rvMonth)}</b><button class="ghost" data-act="rvmonth" data-d="1">›</button></div>
+    ${rv.sum.users.length ? rv.sum.users.map((u) => { const p = paid.get(u.user_id);
+      return `<div class="card"><div class="row"><b class="sp">${esc(u.name)}</b>${p ? '<span class="chip ok">จ่ายแล้ว</span>' : u.open_days ? `<span class="chip warn">รอตรวจ ${u.open_days} วัน</span>` : u.unpaid_satang ? '<span class="chip">รอจ่าย</span>' : ''}</div>
+      <div class="mut" style="margin:6px 0">อนุมัติ ${u.approved_days} วัน · ${kmf(u.approved_km)} กม.</div><div class="big">${baht(u.approved_satang)} <span class="mut">฿</span></div>
+      ${p ? `<div class="mut" style="margin-top:6px">จ่ายเมื่อ ${new Date(p.paid_at).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Bangkok' })}${p.reference ? ' · อ้างอิง ' + esc(p.reference) : ''}</div>`
+      : u.unpaid_satang && !u.open_days ? `<div style="margin-top:10px"><button data-act="paypay" data-uid="${u.user_id}" data-name="${esc(u.name)}" data-amt="${u.unpaid_satang}">บันทึกการจ่าย ${baht(u.unpaid_satang)} ฿</button></div>` : ''}</div>`; }).join('') : '<div class="card"><div class="mut">ยังไม่มีทริปในเดือนนี้</div></div>'}
+    <button class="sec" data-act="report">สรุปเดือนนี้ / พิมพ์ PDF</button>`;
+  }
+  app.innerHTML = `${bar('ตรวจและจ่าย', '#/')}${body}`;
+}
+
+async function loadRvTrip(id) {
+  try {
+    const d = await apiGet('/trips/' + id); S.rvTrip = { id, d };
+    S.rvImgs = {};
+    for (const k of ['start', 'end']) {
+      if (!d.photos.some((p) => p.kind === k && !p.deleted_at)) continue;
+      fetch(API + `/trips/${id}/photo/${k}`, { headers: authHdr() }).then((r) => (r.ok ? r.blob() : null)).then((b) => {
+        if (b && S.rvTrip?.id === id) { const el = document.getElementById('img_' + k); if (el) el.src = URL.createObjectURL(b); }
+      }).catch(() => {});
+    }
+  } catch { S.rvTrip = { id, err: true }; }
+  if (route().name === 'rv' && route().id === id) renderRvTrip();
+}
+function renderRvTrip() {
+  const id = route().id;
+  if (!S.rvTrip || S.rvTrip.id !== id) { S.rvTrip = null; loadRvTrip(id); }
+  const x = S.rvTrip;
+  if (!x) { app.innerHTML = `${bar('ตรวจทริป', '#/review')}<div class="card"><div class="mut">กำลังโหลด...</div></div>`; return; }
+  if (x.err) { app.innerHTML = `${bar('ตรวจทริป', '#/review')}<div class="banner bad">โหลดไม่สำเร็จ</div>`; return; }
+  const { trip: t, stops, approvals } = x.d;
+  const km = t.approved_km ?? t.actual_km ?? 0, can = t.status === 'submitted';
+  const ph = (k, label) => `<div style="margin-bottom:10px"><div class="mut">${label}<b>${(k === 'start' ? t.start_odometer : t.end_odometer)?.toLocaleString('th-TH') ?? '-'}</b></div>${x.d.photos.some((p) => p.kind === k && !p.deleted_at) ? `<img class="shot" id="img_${k}" alt="${label}">` : '<div class="mut">ไม่มีภาพ (หมดอายุหรือไม่ได้แนบ)</div>'}</div>`;
+  app.innerHTML = `${bar(fmtDate(t.trip_date), '#/review')}
+  <div class="card"><div class="row"><b class="sp">${esc(S.rv?.queue?.find((q) => q.id === id)?.user_name || '')}</b>${chip(t.status)}</div>
+    <div class="row" style="margin-top:8px"><div class="sp"><div class="mut">ระยะทางที่แจ้ง</div><div class="big">${kmf(t.actual_km)} กม.</div></div><div class="sp"><div class="mut">Google Maps</div><div class="big">${t.maps_km != null ? kmf(t.maps_km) : '-'}</div></div></div>
+    <div style="margin-top:8px">${flagChips(t.flags) || '<span class="mut">ไม่มีธงผิดปกติ</span>'}</div></div>
+  <div class="card"><h2>ภาพเลขไมล์</h2>${ph('start', 'เริ่มต้น ')}${ph('end', 'สิ้นสุด ')}</div>
+  <div class="card"><h2>จุดแวะ (${stops.length})</h2>${stops.length ? `<ul class="list">${stops.map((s, i) => `<li><span class="num">${i + 1}</span><div class="sp"><b>${esc(s.project_code ? s.project_code + ' · ' + s.project_name : s.other_label)}</b><div class="mut">${PURPOSES[s.purpose_code] || ''} · ${fmtTime(s.client_arrived_at || s.arrived_at)}${s.is_backfilled ? ' · ย้อนหลัง' : ''}</div></div></li>`).join('')}</ul>` : '<div class="mut">ไม่มีจุดแวะ</div>'}</div>
+  ${approvals.length ? `<div class="card"><h2>ประวัติ</h2><ul class="list">${approvals.map((a) => `<li><div class="sp"><b>${{ adjust_km: 'ปรับ km', admin_approve: 'อนุมัติ', return: 'ส่งกลับ' }[a.action] || a.action}</b> · ${esc(a.actor_name)}<div class="mut">${a.action === 'adjust_km' ? kmf(a.from_km) + ' → ' + kmf(a.to_km) + ' กม. · ' : ''}${esc(a.reason || '')}</div></div></li>`).join('')}</ul></div>` : ''}
+  ${can ? `<div class="card"><h2>ตัดสินใจ</h2><label class="f" for="rv_km">ระยะทางที่อนุมัติ (กม.) · ${baht(t.rate_satang_km)} ฿/กม.</label><input id="rv_km" type="number" inputmode="decimal" step="0.1" min="0" value="${km}">
+    <label class="f" for="rv_reason">เหตุผล (จำเป็นถ้าปรับ km หรือส่งกลับ)</label><input id="rv_reason" type="text" maxlength="300">
+    <div style="margin-top:14px;display:grid;gap:8px"><button data-act="rvapprove" data-id="${id}" data-km="${km}">อนุมัติ</button><button class="sec" data-act="rvreturn" data-id="${id}">ส่งกลับให้แก้ไข</button></div></div>` : `<div class="card"><div class="mut">ทริปนี้ไม่ได้อยู่ในสถานะรอตรวจ</div><div class="big" style="margin-top:6px">${kmf(km)} กม. · ${baht(t.amount_satang)} ฿</div></div>`}`;
+}
+
+async function buildReport() {
+  const m = S.rvMonth;
+  const sum = S.rv?.sum?.month === m ? S.rv.sum : await apiGet('/admin/summary?month=' + m);
+  const pay = new Map(sum.payments.map((p) => [p.user_id, p]));
+  const rows = sum.users.filter((u) => u.approved_days);
+  const grandKm = rows.reduce((a, u) => a + u.approved_km, 0), grandAmt = rows.reduce((a, u) => a + u.approved_satang, 0);
+  const rate = sum.days[0]?.rate_satang_km;
+  $('#rpt').innerHTML = `<h1>สรุปค่าเดินทางพนักงานขาย ประจำเดือน${monthTh(m)}</h1>
+  <div>พิมพ์เมื่อ ${new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' })}${rate ? ' · อัตรา ' + baht(rate) + ' บาท/กม.' : ''}</div>
+  <h2>ภาพรวม</h2><table class="tbl"><tr><th>พนักงาน</th><th class="r">วัน</th><th class="r">กม.</th><th class="r">ยอด (บาท)</th><th>สถานะจ่าย</th></tr>
+  ${rows.map((u) => { const p = pay.get(u.user_id); return `<tr><td>${esc(u.name)}</td><td class="r">${u.approved_days}</td><td class="r">${kmf(u.approved_km)}</td><td class="r">${baht(u.approved_satang)}</td><td>${p ? 'จ่ายแล้ว ' + new Date(p.paid_at).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Bangkok' }) + (p.reference ? ' (' + esc(p.reference) + ')' : '') : 'ยังไม่จ่าย'}</td></tr>`; }).join('')}
+  <tr><th>รวม</th><th></th><th class="r">${kmf(grandKm)}</th><th class="r">${baht(grandAmt)}</th><th></th></tr></table>
+  ${rows.map((u) => `<section><h2>${esc(u.name)}</h2><table class="tbl"><tr><th>วันที่</th><th>จุดแวะ</th><th class="r">ไมล์ เริ่ม–จบ</th><th class="r">กม.</th><th class="r">บาท</th></tr>
+    ${sum.days.filter((d) => d.user_id === u.user_id).map((d) => `<tr><td>${fmtDate(d.trip_date)}</td><td>${esc(d.stops || '-')}</td><td class="r">${d.start_odometer?.toLocaleString('th-TH') ?? '-'}–${d.end_odometer?.toLocaleString('th-TH') ?? '-'}</td><td class="r">${kmf(d.approved_km)}</td><td class="r">${baht(d.amount_satang)}</td></tr>`).join('')}
+    <tr><th colspan="3">รวม</th><th class="r">${kmf(u.approved_km)}</th><th class="r">${baht(u.approved_satang)}</th></tr></table></section>`).join('')}
+  <div class="sig"><div>ผู้จัดทำ</div><div>ผู้อนุมัติ</div></div>`;
+}
 
 const ROLE_TH = { sales: 'พนักงานขาย', admin: 'Admin', manager: 'ผู้จัดการ', accounting: 'บัญชี' };
 const USER_ERR = { email_and_name_required: 'กรอกอีเมลและชื่อให้ถูกต้อง', invalid_role: 'สิทธิ์ไม่ถูกต้อง', cannot_demote_self: 'ไม่สามารถลดสิทธิ์หรือปิดบัญชีของตัวเองได้', forbidden: 'เฉพาะ Admin เท่านั้น', cannot_delete_self: 'ลบบัญชีของตัวเองไม่ได้', user_has_history: 'ผู้ใช้นี้มีประวัติการใช้งานแล้ว ลบไม่ได้ ให้กด "ปิด" แทน', user_not_found: 'ไม่พบผู้ใช้นี้' };
@@ -335,6 +447,7 @@ function renderHome() {
   const fails = S.failures.map((f, i) => `<div class="banner bad">ส่งข้อมูลไม่สำเร็จ${f.date ? ' (' + fmtDate(f.date) + ')' : ''}: ${esc(f.msg)} <button class="ghost" data-act="dismiss" data-i="${i}">ปิด</button></div>`).join('');
   app.innerHTML = `${bar('เบิกค่าเดินทาง')}${fails}
   <div class="row" style="margin-bottom:12px"><div class="sp"><b>${esc(S.session.user.name)}</b><div class="mut">${esc(S.session.user.email)}</div></div><button class="ghost" data-act="logout">ออก</button></div>
+  ${S.session.user.role === 'admin' ? '<a class="btn" href="#/review" style="display:block;text-align:center;text-decoration:none;margin-bottom:8px">ตรวจและจ่าย</a>' : ''}
   ${S.session.user.role === 'admin' ? '<a class="btn sec" href="#/users" style="display:block;text-align:center;text-decoration:none;margin-bottom:12px">จัดการผู้ใช้ (Admin)</a>' : ''}
   <div class="grid2" style="margin-bottom:12px"><div class="card kpi" style="margin:0"><h2>ระยะทางเดือนนี้</h2><div class="big">${kmf(sumKm)} <span class="mut">กม.</span></div></div>
   <div class="card kpi" style="margin:0"><h2>ยอดเบิกเดือนนี้</h2><div class="big">${baht(sumAmt)} <span class="mut">฿</span></div></div></div>
@@ -453,6 +566,35 @@ const actions = {
     if (r.status === 401) return expire();
     if (!r.ok) { const d = await r.json().catch(() => ({})); return toast(USER_ERR[d.error] || 'ลบไม่สำเร็จ (' + (d.error || r.status) + ')'); }
     toast('ลบผู้ใช้แล้ว'); await loadUsers();
+  },
+  rvmonth(el) { S.rvMonth = shiftMonth(S.rvMonth, +el.dataset.d); renderReview(); },
+  async rvapprove(el) {
+    const id = el.dataset.id, km = parseFloat($('#rv_km').value), reason = $('#rv_reason').value.trim();
+    if (!Number.isFinite(km) || km < 0) return toast('ระยะทางไม่ถูกต้อง');
+    const changed = Math.abs(km - parseFloat(el.dataset.km)) > 0.001;
+    if (changed && !reason) return toast('ปรับ km ต้องใส่เหตุผล');
+    if (!confirm(changed ? `อนุมัติที่ ${km} กม. (ปรับจาก ${el.dataset.km})?` : `อนุมัติ ${km} กม.?`)) return;
+    el.disabled = true;
+    try { await adminCall('POST', `/admin/trips/${id}/approve`, { km, reason }); toast('อนุมัติแล้ว'); S.rv = null; S.rvTrip = null; go('#/review'); }
+    catch (e) { el.disabled = false; toast(REV_ERR[e.code] || 'ไม่สำเร็จ (' + (e.code || e.message) + ')'); }
+  },
+  async rvreturn(el) {
+    const id = el.dataset.id, reason = $('#rv_reason').value.trim();
+    if (!reason) return toast('ใส่เหตุผลที่ส่งกลับ');
+    if (!confirm('ส่งกลับให้พนักงานแก้ไข?')) return;
+    try { await adminCall('POST', `/admin/trips/${id}/return`, { reason }); toast('ส่งกลับแล้ว'); S.rv = null; S.rvTrip = null; go('#/review'); }
+    catch (e) { toast(REV_ERR[e.code] || 'ไม่สำเร็จ (' + (e.code || e.message) + ')'); }
+  },
+  async paypay(el) {
+    const ref = prompt(`บันทึกการจ่ายให้ ${el.dataset.name} ${baht(+el.dataset.amt)} ฿ ของ${monthTh(S.rvMonth)}\nเลขอ้างอิงการโอน (เว้นว่างได้):`);
+    if (ref === null) return;
+    try { await adminCall('POST', '/admin/pay', { month: S.rvMonth, user_id: el.dataset.uid, reference: ref }); toast('บันทึกการจ่ายแล้ว'); S.rv = null; renderReview(); }
+    catch (e) { toast(REV_ERR[e.code] || 'ไม่สำเร็จ (' + (e.code || e.message) + ')'); }
+  },
+  async report() {
+    try { await buildReport(); } catch { return toast('สร้างรายงานไม่สำเร็จ'); }
+    const old = document.title; document.title = 'สรุปค่าเดินทาง-' + S.rvMonth;
+    window.print(); setTimeout(() => { document.title = old; }, 500);
   },
   async adduser(el) {
     const email = $('#u_email').value.trim().toLowerCase(), name = $('#u_name').value.trim(), role = $('#u_role').value;
