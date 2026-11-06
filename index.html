@@ -57,8 +57,8 @@ input.odo{font-size:28px;font-weight:700;text-align:center;letter-spacing:1px}
 'use strict';
 /* ====== ตั้งค่า: แก้ 2 ค่านี้หลัง deploy Worker ====== */
 const CONFIG = {
-  API_BASE: 'REPLACE_WITH_WORKER_URL',               // เช่น https://sales-mileage-api.xxx.workers.dev
-  GOOGLE_CLIENT_ID: 'REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID'
+  API_BASE: 'sales-mileage-api.jsuparkit.workers.dev',               // เช่น https://sales-mileage-api.xxx.workers.dev
+  GOOGLE_CLIENT_ID: '665164861966-p9m4grv3ijucjdt5ehpbv31l6b1q46ng.apps.googleusercontent.com'
 };
 const API = (localStorage.getItem('mileage_api') || CONFIG.API_BASE).replace(/\/+$/, '');
 
