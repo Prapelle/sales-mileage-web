@@ -540,13 +540,14 @@ function renderUsers() {
     <label class="f" for="u_name">ชื่อ</label><input id="u_name" type="text">
     <label class="f" for="u_role">สิทธิ์</label><select id="u_role">${Object.entries(ROLE_TH).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
     <div style="margin-top:14px"><button data-act="adduser">เพิ่มผู้ใช้</button></div></div>
-  ${list && list.length ? `<div class="card"><h2>ฐานที่อยู่พนักงาน (จุดเริ่มและกลับ ใช้คำนวณ Maps)</h2>
+  ${list && list.length ? `<div class="card"><h2>ฐานที่อยู่พนักงาน (สำรอง ไม่บังคับ)</h2>
+    <div class="mut" style="margin-bottom:6px">ปกติระบบใช้ GPS ตอนถ่ายรูปไมล์เริ่ม/จบวันเป็นจุดเริ่ม/จบ ฐานนี้ใช้แทนเฉพาะวันที่ไม่ได้ GPS</div>
     <label class="f" for="b_user">พนักงาน</label><select id="b_user" data-act-change="basesel">${list.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select>
     <label class="f" for="b_label">ชื่อฐาน (เช่น บ้าน, สำนักงาน)</label><input id="b_label" type="text" maxlength="60" value="${esc(list[0].base_label || '')}">
     <label class="f" for="b_ll">พิกัดฐาน</label><input id="b_ll" type="text" placeholder="14.9930, 103.1029" value="${list[0].base_lat != null ? list[0].base_lat + ', ' + list[0].base_lng : ''}">${pickBtn('b_ll')}
     <div class="mut" style="margin-top:4px">${COORD_HELP}</div>
     <div style="margin-top:12px"><button data-act="savebase">บันทึกฐาน</button></div></div>` : ''}
-  <div class="card"><h2>ผู้ใช้ทั้งหมด</h2>${list === null ? `<div class="mut">${esc(S.usersErr || 'กำลังโหลด...')}</div>` : list.length ? `<ul class="list">${list.map((u) => `<li><div class="sp"><b>${esc(u.name)}</b><div class="mut">${esc(u.email)}${u.role === 'sales' ? (u.base_lat != null ? ' · ฐาน ✓' : ' · <span style="color:var(--warn)">ยังไม่ตั้งฐาน</span>') : ''}</div></div>
+  <div class="card"><h2>ผู้ใช้ทั้งหมด</h2>${list === null ? `<div class="mut">${esc(S.usersErr || 'กำลังโหลด...')}</div>` : list.length ? `<ul class="list">${list.map((u) => `<li><div class="sp"><b>${esc(u.name)}</b><div class="mut">${esc(u.email)}${u.role === 'sales' && u.base_lat != null ? ' · มีฐานสำรอง' : ''}</div></div>
     <select data-uid="${u.id}" data-act-change="userrole" style="width:auto;min-height:40px;padding:6px">${Object.entries(ROLE_TH).map(([k, v]) => `<option value="${k}"${u.role === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
     <button class="${u.active ? 'danger' : 'ghost'}" data-act="toggleuser" data-uid="${u.id}">${u.active ? 'ปิด' : 'เปิด'}</button>${u.id !== S.session.user.id ? `<button class="danger" data-act="deluser" data-uid="${u.id}">ลบ</button>` : ''}</li>`).join('')}</ul>` : '<div class="mut">ยังไม่มีผู้ใช้</div>'}</div>`;
 }
