@@ -327,7 +327,7 @@ function loadMapsJs() {
   mapsJs = new Promise((res, rej) => {
     const sc = document.createElement('script');
     sc.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(CONFIG.MAPS_BROWSER_KEY) + '&v=weekly&loading=async&language=th&region=TH';
-    sc.async = true; sc.onload = () => res(); sc.onerror = () => { mapsJs = null; rej(new Error('load')); };
+    sc.async = true; sc.onload = () => res(); sc.onerror = () => { mapsJs = null; rej(new Error('โหลดสคริปต์ Google Maps ไม่ได้ (เครือข่ายหรือโปรแกรมบล็อกโฆษณา)')); };
     document.head.appendChild(sc);
   });
   return mapsJs;
@@ -348,7 +348,9 @@ function pickLocation(initText, hint) {
     window.gm_authFailure = () => err('ใช้ API key ไม่ได้: ตรวจว่าเปิด Maps JavaScript API และ Places API (New) แล้ว และ referrer ตรงกับ https://prapelle.github.io/*');
     try {
       await loadMapsJs();
-      const [{ Map }, { PlaceAutocompleteElement }, { AdvancedMarkerElement }] = await Promise.all([google.maps.importLibrary('maps'), google.maps.importLibrary('places'), google.maps.importLibrary('marker')]);
+      const withTimeout = (p, name) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('ไลบรารี ' + name + ' ไม่ตอบสนอง (มักเป็นเพราะ key/API ยังไม่พร้อม)')), 15000))]);
+      const [{ Map }, { PlaceAutocompleteElement }, { AdvancedMarkerElement }] = await Promise.all([
+        withTimeout(google.maps.importLibrary('maps'), 'maps'), withTimeout(google.maps.importLibrary('places'), 'places (ต้องเปิด Places API (New))'), withTimeout(google.maps.importLibrary('marker'), 'marker')]);
       const init = parseLatLng(initText);
       const map = new Map(ov.querySelector('#pk_map'), { center: init || (hint && { lat: hint.lat, lng: hint.lng }) || { lat: 14.993, lng: 103.1029 }, zoom: init || hint ? 16 : 12, mapId: 'DEMO_MAP_ID', gestureHandling: 'greedy', streetViewControl: false, mapTypeControl: false, fullscreenControl: false });
       const marker = new AdvancedMarkerElement({ map, position: init || null, gmpDraggable: true });
@@ -368,7 +370,11 @@ function pickLocation(initText, hint) {
           const l = place.location; set(typeof l.lat === 'function' ? l.lat() : l.lat, typeof l.lng === 'function' ? l.lng() : l.lng, true);
         } catch { err('ดึงตำแหน่งของสถานที่นี้ไม่ได้ ลองแตะบนแผนที่แทน'); }
       });
-    } catch { err('โหลดแผนที่ไม่สำเร็จ ตรวจอินเทอร์เน็ตและ API key หรือปิดแล้ววางพิกัดเอง'); }
+    } catch (e) {
+      console.error('map picker', e);
+      const cur = ov.querySelector('#pk_err').textContent;
+      err((cur ? cur + ' | ' : '') + 'โหลดแผนที่ไม่สำเร็จ: ' + (e && e.message ? e.message : e) + ' — ปิดแล้ววางพิกัดเองได้');
+    }
   });
 }
 
