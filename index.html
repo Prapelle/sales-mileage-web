@@ -130,8 +130,11 @@ async function tx(store, mode, fn) {
 }
 const kvGet = (k) => tx('kv', 'readonly', (s) => s.get(k));
 const kvSet = (k, v) => tx('kv', 'readwrite', (s) => { s.put(v, k); });
-const obAdd = (op) => tx('outbox', 'readwrite', (s) => { s.add(op); });
-const obAll = () => tx('outbox', 'readonly', (s) => s.getAll());
+/* ข้อมูลในเครื่องแยกตามผู้ใช้: คีย์แคชมี uid ต่อท้าย และทุกรายการในคิวส่งเก็บ uid ของเจ้าของ จึงไม่ปนกันเมื่อหลายคนใช้เครื่องเดียวกัน */
+const uid = () => S.session?.user?.id || '_';
+const obAdd = (op) => tx('outbox', 'readwrite', (s) => { s.add({ ...op, uid: uid() }); });
+const obRaw = () => tx('outbox', 'readonly', (s) => s.getAll());
+const obAll = async () => (await obRaw()).filter((o) => o.uid === uid());
 const obDel = (seq) => tx('outbox', 'readwrite', (s) => { s.delete(seq); });
 
 /* ====== state ====== */
@@ -139,8 +142,8 @@ const S = {
   session: JSON.parse(localStorage.getItem('mileage_session') || 'null'),
   trips: {}, deleted: new Set(), projects: [], failures: [], pending: 0, draftPhoto: null, expired: false,
 };
-const saveTrips = () => kvSet('trips', S.trips);
-const saveFailures = () => kvSet('failures', S.failures);
+const saveTrips = () => kvSet('trips:' + uid(), S.trips);
+const saveFailures = () => kvSet('failures:' + uid(), S.failures);
 async function refreshPending() { S.pending = (await obAll()).length; }
 const hasPending = async (id) => (await obAll()).some((o) => o.tripId === id);
 
@@ -605,8 +608,8 @@ async function onCredential(resp) {
     const r = await fetch(API + '/auth/google', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id_token: resp.credential }) });
     let d; try { d = await r.json(); } catch { $('#loginerr').textContent = 'เซิร์ฟเวอร์ตอบผิดรูปแบบ (HTTP ' + r.status + ') — Worker อาจยังไม่ได้ deploy'; return; }
     if (!r.ok) { $('#loginerr').textContent = d.error === 'not_whitelisted' ? 'อีเมลนี้ยังไม่ได้รับสิทธิ์ ติดต่อ Admin' : 'เข้าสู่ระบบไม่สำเร็จ (' + (d.error || r.status) + ')'; return; }
-    S.users = undefined; S.session = d; S.expired = false; localStorage.setItem('mileage_session', JSON.stringify(d));
-    boot();
+    localStorage.setItem('mileage_session', JSON.stringify(d));
+    location.reload();   // เริ่มใหม่ทั้งหมด ล้างสถานะในหน่วยความจำของผู้ใช้คนก่อน
   } catch (e) { $('#loginerr').textContent = 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ (' + API + ' : ' + (e && e.message || e) + ')'; }
 }
 
@@ -709,7 +712,7 @@ const actions = {
   open(el) { go('#/trip/' + el.dataset.id); },
   toend(el) { go('#/end/' + el.dataset.id); },
   dismiss(el) { S.failures.splice(+el.dataset.i, 1); saveFailures(); render(); },
-  logout() { if (S.pending && !confirm('มีข้อมูลที่ยังไม่ได้ส่ง ถ้าออกจากระบบ ข้อมูลจะยังอยู่ในเครื่องและส่งได้เมื่อเข้าสู่ระบบอีกครั้ง ออกจากระบบใช่ไหม?')) return; localStorage.removeItem('mileage_session'); S.session = null; render(); },
+  logout() { if (S.pending && !confirm('มีข้อมูลที่ยังไม่ได้ส่ง ถ้าออกจากระบบ ข้อมูลจะยังอยู่ในเครื่องและส่งได้เมื่อเข้าสู่ระบบอีกครั้ง ออกจากระบบใช่ไหม?')) return; localStorage.removeItem('mileage_session'); S.session = null; location.reload(); },
 
   async dostart(el) {
     const odo = odoVal();
@@ -914,8 +917,16 @@ window.addEventListener('online', () => { flush().then(syncHome); render(); });
 window.addEventListener('offline', render);
 
 /* ====== เริ่มต้น ====== */
+/* ข้อมูลรุ่นเก่า (ก่อนแยกตามผู้ใช้): คิวที่ไม่มี uid ยกให้ผู้ใช้ที่ล็อกอินอยู่ตอนนี้ ส่วนแคชทริปเก่าทิ้ง (ดึงใหม่จากเซิร์ฟเวอร์ได้) */
+async function migrateLegacy() {
+  if (!S.session) return;
+  const raw = await obRaw();
+  for (const o of raw.filter((x) => !x.uid)) await tx('outbox', 'readwrite', (st) => { st.put({ ...o, uid: uid() }); });
+  if ((await kvGet('trips')) !== undefined) await tx('kv', 'readwrite', (st) => { st.delete('trips'); st.delete('failures'); });
+}
 async function boot() {
-  S.trips = (await kvGet('trips')) || {}; S.projects = (await kvGet('projects')) || []; S.failures = (await kvGet('failures')) || [];
+  await migrateLegacy();
+  S.trips = (await kvGet('trips:' + uid())) || {}; S.projects = (await kvGet('projects')) || []; S.failures = (await kvGet('failures:' + uid())) || [];
   await refreshPending(); render();
   if (S.session && navigator.onLine) { await loadProjects(); await flush(); await syncHome(); render(); }
 }
